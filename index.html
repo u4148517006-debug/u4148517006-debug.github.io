@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>両手用流水キーボード - 左右X軸ソート復元版</title>
+  <title>両手用流水キーボード - キーボード常時表示＆左手配列分離版</title>
   <style>
     body, html {
       margin: 0; padding: 0; overflow: hidden;
@@ -42,7 +42,6 @@
       font-size: 11px; background: #eee; padding: 4px 8px; border-radius: 4px; font-weight: bold;
     }
 
-    /* 🍇 6月モードのお題 */
     #odai-display {
       position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
       font-size: 140px; font-weight: bold; color: rgba(233, 30, 99, 0.15);
@@ -64,7 +63,7 @@
       <button id="fab" class="btn">🔓 ロック</button>
     </div>
     
-    <div id="ml-features" class="flex-center">横画面：左半分に左手、右半分に右手を置いてください</div>
+    <div id="ml-features" class="flex-center">画面から指を離してもキーボードの位置はキープされます</div>
     
     <div class="flex-right">
       <span id="status-badge">追従中</span>
@@ -96,32 +95,52 @@
     const keySize = 34; 
     const waterSize = 15;
     const stay = { x: 0, y: 0 };
+    
+    // 【右手基準の移動ベクトル】
     const moveUp = { x: keySize * -0.23, y: keySize * 2.2 };
     const moveDown = { x: keySize * 0.23, y: keySize * -2.2 };
-    const moveLeft = { x: keySize * -2.14, y: 0 };
+    const moveLeft = { x: keySize * -2.14, y: 0 }; // 右手人差し指は「左側」へ拡張する
     const threeKeys = [stay, moveUp, moveDown, { x: moveUp.x * 2, y: moveUp.y * 2 }];
 
-    // 【右手用】人差し指(7キー)が左端、右に行くほど小指
+    // 【左手基準の移動ベクトル（人差し指が右側に拡張するようにXを反転）】
+    const moveLeftForLeftHand = { x: keySize * 2.14, y: 0 }; // 左手人差し指は「右側（中央寄り）」へ拡張
+
+    // ーーー 🛠️ 配列位置の定義 ーーー
+    
+    // 【右手用位置】人差し指(指0)が左端、右に行くほど小指
     const rightKeysPositions = [
       [stay, moveUp, moveDown, moveLeft, { x: moveLeft.x + moveUp.x, y: moveLeft.y + moveUp.y }, { x: moveLeft.x + moveDown.x, y: moveLeft.y + moveDown.y }, { x: moveUp.x * 2, y: moveUp.y * 2 }], // 指0: 人差し指
       threeKeys, // 指1: 中指
       threeKeys, // 指2: 薬指
       threeKeys  // 指3: 小指
     ];
-    const rightKeysNames = [
-      ["J", "U", "M", "H", "Y", "N", "止"], ["K", "I", ",", "止"], ["L", "O", ".", "止"], [";", "P", "?", "止"]
-    ];
 
-    // 【左手用】完全に対称。左端が小指、右端(中央線寄り)が人差し指(7キー)
+    // 【左手用位置】左端が小指、右端が人差し指(指3)。人差し指の3つの縦配列は「右側」へ展開
     const leftKeysPositions = [
       threeKeys, // 指0: 小指
       threeKeys, // 指1: 薬指
       threeKeys, // 指2: 中指
-      [stay, moveUp, moveDown, moveLeft, { x: moveLeft.x + moveUp.x, y: moveLeft.y + moveUp.y }, { x: moveLeft.x + moveDown.x, y: moveLeft.y + moveDown.y }, { x: moveUp.x * 2, y: moveUp.y * 2 }] // 指3: 人差し指
+      [stay, moveUp, moveDown, moveLeftForLeftHand, { x: moveLeftForLeftHand.x + moveUp.x, y: moveLeftForLeftHand.y + moveUp.y }, { x: moveLeftForLeftHand.x + moveDown.x, y: moveLeftForLeftHand.y + moveDown.y }, { x: moveUp.x * 2, y: moveUp.y * 2 }] // 指3: 人差し指（右側展開仕様）
     ];
+
+    // ーーー 🔤 【独立】文字配列（ここを自由にいじってください） ーーー
+
+    // 【左手専用の文字配列】(指0:小指 ～ 指3:人差し指)
     const leftKeysNames = [
-      ["A", "Q", "Z", "止"], ["S", "W", "X", "止"], ["D", "E", "C", "止"], ["F", "R", "V", "G", "T", "B", "止"]
+      ["A", "Q", "Z", "止"], // 指0: 左手小指
+      ["S", "W", "X", "止"], // 指1: 左手薬指
+      ["D", "E", "C", "止"], // 指2: 左手中指
+      ["F", "R", "V", "G", "T", "B", "止"]  // 指3: 左手人差し指 (7キー)
     ];
+
+    // 【右手専用の文字配列】(指0:人差し指 ～ 指3:小指)
+    const rightKeysNames = [
+      ["J", "U", "M", "H", "Y", "N", "止"], // 指0: 右手人差し指 (7キー)
+      ["K", "I", ",", "止"], // 指1: 右手中指
+      ["L", "O", ".", "止"], // 指2: 右手薬指
+      [";", "P", "?", "止"]  // 指3: 右手小指
+    ];
+
 
     const centerAdjust = [
       { x: keySize * -3.7, y: keySize * -0.2 },
@@ -140,12 +159,10 @@
         this.strokeStarts = [null, null, null, null];
         this.strokeEnds = [null, null, null, null];
         this.isTracking = false;
+        this.hasPosition = false; // 位置が一度でも確定したかどうかのフラグ
       }
-      reset() {
-        this.stableFingers = [];
-        this.stableCenter = null;
-        this.adjustedCenters = [];
-        this.fourAngles = [];
+      // reset() を呼んでも、表示用の幾何データ(stableFingers等)は維持し、ストロークだけクリアする仕様に変更
+      clearStroke() {
         this.strokeStarts = [null, null, null, null];
         this.strokeEnds = [null, null, null, null];
         this.isTracking = false;
@@ -171,8 +188,7 @@
       return lerp(a, b, speed > 5 ? 5 : speed);
     }
 
-    // 🔄【復元】純粋なX座標（左右の並び）ベースのソートに戻す
-    // 横画面なら、左から右へ「小指〜人差し指」または「人差し指〜小指」と確実に並ぶため一番安定します
+    // 純粋なX座標（左右の並び）ベースのソート
     function sortFingersAbsoluteX(pts) {
       return [...pts].sort((a, b) => a.x - b.x);
     }
@@ -185,18 +201,17 @@
     }
 
     function handleTouch(e) {
-      let midX = canvas.width / 2; // 🎬 縦の境界線
+      let midX = canvas.width / 2; 
       let leftPoints = [];
       let rightPoints = [];
       let activeIds = new Set();
 
       Array.from(e.touches).forEach(t => {
-        if (t.clientY < 50) return; // メニュー内の誤作動防止
+        if (t.clientY < 50) return; 
 
         activeIds.add(t.identifier);
         let pt = { x: t.clientX, y: t.clientY };
         
-        // 縦線より左なら左手、右なら右手
         if (pt.x < midX) leftPoints.push(pt); else rightPoints.push(pt);
 
         if (!trails[t.identifier]) trails[t.identifier] = [];
@@ -204,9 +219,10 @@
         if (trails[t.identifier].length > 15) trails[t.identifier].shift();
       });
 
-      // ーーー 左手領域（画面左側・Xの昇順で 小指➔薬指➔中指➔人差し指） ーーー
+      // ーーー 左手領域（画面左側） ーーー
       if (!isLocked && leftPoints.length >= 4) {
         leftHand.isTracking = true;
+        leftHand.hasPosition = true;
         let sorted = sortFingersAbsoluteX(leftPoints.slice(0, 4));
         if (leftHand.stableFingers.length === 0) {
           leftHand.stableFingers = sorted.map(p => ({...p}));
@@ -219,9 +235,10 @@
         leftHand.strokeEnds = leftHand.stableFingers.map((sf, idx) => sorted[idx] || sf);
       }
 
-      // ーーー 右手領域（画面右側・Xの昇順で 人差し指➔中指➔薬指➔小指） ーーー
+      // ーーー 右手領域（画面右側） ーーー
       if (!isLocked && rightPoints.length >= 4) {
         rightHand.isTracking = true;
+        rightHand.hasPosition = true;
         let sorted = sortFingersAbsoluteX(rightPoints.slice(0, 4));
         if (rightHand.stableFingers.length === 0) {
           rightHand.stableFingers = sorted.map(p => ({...p}));
@@ -234,19 +251,18 @@
         rightHand.strokeEnds = rightHand.stableFingers.map((sf, idx) => sorted[idx] || sf);
       }
 
+      // 指を離した時
       if (e.touches.length === 0) {
         evaluateGlobalFlick();
-        if (!isLocked) {
-          leftHand.reset();
-          rightHand.reset();
-        }
+        // 🌟 消去せず、ストローク情報（フリックの始点・終点）だけを安全に初期化
+        leftHand.clearStroke();
+        rightHand.clearStroke();
       }
 
       Object.keys(trails).forEach(id => { if (!activeIds.has(Number(id))) delete trails[id]; });
     }
 
     function updateHandGeometry(hand, realFingers) {
-      // 左右対称に中心を算出する（左手は指0と指3、右手も指0と指3の両端から）
       let realCenter = circleCenterFrom2Points(realFingers[0], realFingers[3]);
       if (!hand.stableCenter) {
         hand.stableCenter = realCenter;
@@ -272,6 +288,9 @@
     function evaluateGlobalFlick() {
       let allMovements = [];
       [ { label: "左手(L)", obj: leftHand }, { label: "右手(R)", obj: rightHand } ].forEach(h => {
+        // 位置が記録されていない場合はスキップ
+        if (!h.obj.hasPosition) return;
+        
         for (let i = 0; i < 4; i++) {
           let start = h.obj.strokeStarts[i]; let end = h.obj.strokeEnds[i];
           if (!start || !end) continue;
@@ -299,8 +318,6 @@
         ).join(' | ');
         
         if (isJuneMode) { sendToSpreadsheet(currentOdai, top2); }
-      } else {
-        mlFeaturesText.innerText = "待機中 / タップ検出";
       }
     }
 
@@ -321,7 +338,7 @@
 
     fab.addEventListener('touchstart', (e) => {
       e.stopPropagation(); 
-      if (leftHand.stableFingers.length === 4 || rightHand.stableFingers.length === 4) {
+      if (leftHand.hasPosition || rightHand.hasPosition) {
         isLocked = !isLocked;
         fab.className = isLocked ? "btn locked" : "btn";
         fab.innerText = isLocked ? "🔒 固定中" : "🔓 ロック";
@@ -360,7 +377,8 @@
     }
 
     function drawHandKeyboard(hand, posPositions, namesList, color) {
-      if (hand.stableFingers.length !== 4) return;
+      // 一度も位置が確定していない初期状態は描画しない
+      if (!hand.hasPosition || hand.stableFingers.length !== 4) return;
 
       ctx.strokeStyle = "rgba(128,128,128,0.25)"; ctx.lineWidth = 2;
       for (let i = 0; i < 4; i++) {
