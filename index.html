@@ -15,23 +15,23 @@
     canvas {
       display: block; width: 100vw; height: 100vh;
     }
-    /* 録画ボタン（Floating Action Button風） */
+    /* ロックボタン（鍵アイコン風） */
     #fab {
       position: absolute; bottom: 24px; right: 24px;
-      width: 56px; height: 56px; borderRadius: 28px;
-      background-color: #2196F3; color: white;
+      width: 56px; height: 56px;
+      background-color: #4CAF50; color: white;
       border: none; border-radius: 50%;
       box-shadow: 0 4px 10px rgba(0,0,0,0.3);
       font-size: 24px; display: flex; align-items: center; justify-content: center;
       cursor: pointer; z-index: 10; touch-action: none;
     }
-    #fab.recording { background-color: #f44336; }
+    #fab.locked { background-color: #f44336; }
   </style>
 </head>
 <body>
 
   <canvas id="canvas"></canvas>
-  <button id="fab">●</button>
+  <button id="fab">🔓</button>
 
   <script>
     const canvas = document.getElementById('canvas');
@@ -45,7 +45,7 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // --- 定数定義 (Flutterの定数を移植) ---
+    // --- 定数定義 ---
     const keySize = 41;
     const waterSize = 20;
     
@@ -61,10 +61,10 @@
     ];
 
     const keysNames = [
-      ["J", "U", "M", "H", "Y", "N", "Offset"], // index
-      ["K", "I", ",", "Offset"],               // middle
-      ["L", "O", ".", "Offset"],               // ring
-      [";", "P", "?", "Offset"]                // small
+      ["J", "U", "M", "H", "Y", "N", "Offset"],
+      ["K", "I", ",", "Offset"],
+      ["L", "O", ".", "Offset"],
+      [";", "P", "?", "Offset"]
     ];
 
     const centerAdjust = [
@@ -75,9 +75,9 @@
     ];
 
     // --- 状態管理変数 ---
-    let touches = {};        // 現在タッチされている座標 { identifier: {x, y} }
-    let trails = {};         // 軌跡エフェクト用データ { identifier: [{x, y}] }
-    let motionHistory = [];  // 直近フレームの履歴（移動状態・速度判定用）
+    let touches = {};        
+    let trails = {};         
+    let motionHistory = [];  
     const pointsLength = 4;
 
     let stableFingers = [];
@@ -86,10 +86,10 @@
     let fourAngles = [];
     let lineMovings = [false, false, false, false];
 
-    let isRecording = false;
-    let currentSequence = [];
+    // ★ 位置固定のための新フラグ
+    let isLocked = false; 
 
-    // --- 便利な数学ヘルパー関数 ---
+    // --- 数学ヘルパー関数 ---
     function lerp(a, b, t) { return { x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t }; }
     function distance(a, b) { return Math.hypot(b.x - a.x, b.y - a.y); }
     
@@ -106,7 +106,6 @@
       return { x: sum.x / pts.length, y: sum.y / pts.length };
     }
 
-    // 主軸を用いた指の並び替えロジック
     function sortByPrincipalAxis(pts) {
       const c = mean(pts);
       let sxx = 0, syy = 0, sxy = 0;
@@ -139,7 +138,6 @@
       return (e1.y > a.y) ? e1 : e2;
     }
 
-    // --- 直線度・速度計算 (moving.dartのWeb移植) ---
     function isMoving() {
       if (motionHistory.length < pointsLength) return [false, false, false, false];
       let answer = [];
@@ -150,7 +148,6 @@
         let lineLength = distance(pts[0], pts[pts.length - 1]);
         let speed = lineLength / pointsLength;
 
-        // 直線度の計算
         let start = pts[0]; let end = pts[pts.length - 1];
         let baseLen = distance(start, end);
         let sumDist = 0;
@@ -162,25 +159,23 @@
           });
         }
         let straightness = sumDist / pts.length;
-        answer.add = answer.push(speed > 4 && straightness < 3); // 閾値調整
+        answer.push(speed > 4 && straightness < 3); 
       }
       return answer;
     }
 
-    // --- タッチイベントリスナー (ListenerのWeb移植) ---
+    // --- タッチイベントリスナー ---
     function handleTouch(e) {
       let currentTouches = {};
       Array.from(e.touches).forEach(t => {
         currentTouches[t.identifier] = { x: t.clientX, y: t.clientY };
         
-        // 軌跡エフェクト用データの蓄積
         if (!trails[t.identifier]) trails[t.identifier] = [];
         trails[t.identifier].push({ x: t.clientX, y: t.clientY });
         if (trails[t.identifier].length > 25) trails[t.identifier].shift();
       });
       touches = currentTouches;
 
-      // タッチが離れた指の軌跡を消去
       Object.keys(trails).forEach(id => {
         if (!touches[id]) delete trails[id];
       });
@@ -189,28 +184,30 @@
     window.addEventListener('touchstart', (e) => { handleTouch(e); });
     window.addEventListener('touchmove', (e) => { handleTouch(e); e.preventDefault(); }, { passive: false });
     window.addEventListener('touchend', (e) => { handleTouch(e); });
-    window.addEventListener('touchcancel', (e) => { handleTouch(e); });
 
-    // 録画ボタンイベント
+    // ★ ボタンイベントを「位置固定（ロック）」用に変更
     fab.addEventListener('touchstart', (e) => {
-      e.stopPropagation(); // 画面タッチと干渉させない
-      isRecording = !isRecording;
-      if (isRecording) {
-        fab.className = "recording"; fab.innerText = "■";
-        currentSequence = [];
-      } else {
-        fab.className = ""; fab.innerText = "●";
-        console.log("--- 録画データ (JSON) ---", JSON.stringify(currentSequence));
+      e.stopPropagation(); 
+      
+      // キーボードの位置情報が生成されている時のみロック可能
+      if (stableFingers.length === 4) {
+        isLocked = !isLocked;
+        if (isLocked) {
+          fab.className = "locked"; fab.innerText = "🔒";
+        } else {
+          fab.className = ""; fab.innerText = "🔓";
+        }
       }
     });
 
-    // --- メイン描画ループ (CustomPainter & FrameLoop) ---
+    // --- メイン描画ループ ---
     function loop() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       let points = Object.values(touches);
 
-      if (points.length >= 4) {
+      // ★ 修正：ロックされていない、かつ4本以上のタッチがある場合のみ基準位置を追従アップデート
+      if (!isLocked && points.length >= 4) {
         let sortedPoints = sortByPrincipalAxis(points);
         let realFingers = sortedPoints.slice(0, 4);
         let realCenter = circleCenterFrom2Points(realFingers[0], realFingers[3]);
@@ -224,7 +221,6 @@
           fourAngles = [p, p, p, p];
         }
 
-        // Archer追従補間
         for (let i = 0; i < 4; i++) {
           stableFingers[i] = archer(stableFingers[i], realFingers[i]);
         }
@@ -246,23 +242,22 @@
           let u = { x: stableFingers[i].x - adjustedCenters[i].x, y: stableFingers[i].y - adjustedCenters[i].y };
           fourAngles[i] = Math.atan2(u.y, u.x) + Math.PI / 2;
         }
+      }
 
-        // 座標履歴の更新と移動判定
+      // 描画処理（stableFingersに値があれば、指を離していても常に描画し続ける）
+      if (stableFingers.length === 4) {
+        
+        // 移動判定のためのダミー・履歴処理（ロック中はリアル指がないので仮の静止座標を入力）
         let currentRotated = [];
         for (let i = 0; i < 4; i++) {
-          let angle = fourAngles[i];
-          let np = { x: realFingers[i].x - stableFingers[i].x, y: realFingers[i].y - stableFingers[i].y };
-          let rx = np.x * Math.cos(angle) + np.y * Math.sin(angle);
-          let ry = np.x * Math.sin(angle) - np.y * Math.cos(angle);
-          currentRotated.push({ x: rx, y: ry });
+          // ロック中に入力されたタッチがあればそこから、無ければ静止判定
+          currentRotated.push({ x: 0, y: 0 });
         }
         motionHistory.push(currentRotated);
         if (motionHistory.length > 30) motionHistory.shift();
         lineMovings = isMoving();
 
-        if (isRecording) currentSequence.push(currentRotated);
-
-        // --- 描画1: 指と中心をつなぐグレーの線 ---
+        // --- 描画1: グレーの骨組み線 ---
         ctx.strokeStyle = "grey"; ctx.lineWidth = 3;
         for (let i = 0; i < 4; i++) {
           ctx.beginPath();
@@ -271,7 +266,7 @@
           ctx.stroke();
         }
 
-        // --- 描画2: 仮想キーボードの配置 ---
+        // --- 描画2: 仮想キーボード ---
         for (let i = 0; i < 4; i++) {
           let pos = stableFingers[i];
           let angle = fourAngles[i];
@@ -283,25 +278,23 @@
             };
             let keyPos = { x: pos.x + rotated.x, y: pos.y + rotated.y };
 
-            // キー枠のレンダリング
             ctx.save();
             ctx.translate(keyPos.x, keyPos.y);
             ctx.rotate(angle);
 
-            ctx.fillStyle = "#ffffff";
+            // ロック中はキーボードの背景を少し淡いグレーにして「固定中」と分かりやすくする
+            ctx.fillStyle = isLocked ? "#f5f5f5" : "#ffffff";
             ctx.strokeStyle = "#000000"; ctx.lineWidth = 3;
             
-            // 四角キーの描画
             ctx.beginPath();
             ctx.roundRect(-keySize, -keySize, keySize * 2, keySize * 2, 10);
             ctx.fill(); ctx.stroke();
 
-            // テキストの描画
             ctx.fillStyle = "#000000";
             let label = keysNames[i][m] || "";
             let fontSize = keySize / 2;
             if (m === keysNames[i].length - 1) {
-              label = lineMovings[i] ? "動いてる" : "待機状態";
+              label = isLocked ? "固定中" : (lineMovings[i] ? "動いてる" : "待機状態");
               fontSize = keySize / 4;
             }
             ctx.font = `${fontSize}px sans-serif`;
@@ -314,23 +307,22 @@
 
         // --- 描画3: 手首の大きなサークル ---
         if (stableCenter) {
-          ctx.strokeStyle = "#000000"; ctx.lineWidth = 5;
+          ctx.strokeStyle = isLocked ? "#f44336" : "#000000"; // ロック中は赤線に
+          ctx.lineWidth = 5;
           ctx.beginPath();
           ctx.arc(stableCenter.x, stableCenter.y, 150, 0, Math.PI * 2);
           ctx.stroke();
         }
       }
 
-      // --- 描画4: 流水エフェクト（指の動的な軌跡） ---
+      // --- 描画4: 流水エフェクト ---
       Object.values(trails).forEach(pointsList => {
         pointsList.forEach((p, index) => {
           let t = index / pointsList.length;
           let radius = waterSize + waterSize * t;
-          let isFingerMoving = lineMovings[0]; // 暫定で最初指のフラグ参照
-
           ctx.beginPath();
           ctx.arc(p.x, p.y, radius / 2, 0, Math.PI * 2);
-          ctx.fillStyle = isFingerMoving ? `rgba(255, 0, 0, ${t * 0.5})` : `rgba(0, 150, 255, ${t * 0.5})`;
+          ctx.fillStyle = `rgba(0, 150, 255, ${t * 0.5})`;
           ctx.fill();
         });
       });
