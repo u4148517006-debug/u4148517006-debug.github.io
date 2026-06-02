@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>4指マルチタッチ仮想キーボード - 完全修正版</title>
+  <title>4指仮想キーボード - ML特徴量抽出版</title>
   <style>
     body, html {
       margin: 0; padding: 0; overflow: hidden;
@@ -29,7 +29,8 @@
       position: absolute; top: 16px; left: 16px;
       background: rgba(255,255,255,0.8); padding: 12px;
       border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-      pointer-events: none; font-size: 14px; z-index: 10;
+      pointer-events: none; font-size: 12px; z-index: 10;
+      font-family: monospace; line-height: 1.4;
     }
     #odai-display {
       position: absolute; top: 15%; left: 50%; transform: translate(-50%, -50%);
@@ -46,24 +47,24 @@
   
   <div id="info-panel">
     <div>ステータス: <span id="status-text">待機中</span></div>
-    <div>ジェスチャー判定: <span id="predict-text">-</span></div>
+    <div style="margin-top: 8px; font-weight: bold;">【抽出された特徴量】</div>
+    <div id="ml-features">指のデータ未確定</div>
   </div>
 
   <div id="odai-display">あ</div>
 
   <script>
     // ==========================================
-    // 🛠️ 設定：GASのURLがある場合はここに貼ってください。
-    // 空のままでもキーボード自体は正常に動作します。
+    // 🛠️ 設定：GASのURL
     // ==========================================
-    const GAS_URL = "https://script.google.com/macros/s/AKfycbz7l2alJHdo7kbYUWgsOdZlDc8Ibnek913pwB-3VQQFU6XJePQjP7BdnOv5yJx5MhSG/exec";
+    const GAS_URL = "";
 
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     const fab = document.getElementById('fab');
     const juneBtn = document.getElementById('june-btn');
     const statusText = document.getElementById('status-text');
-    const predictText = document.getElementById('predict-text');
+    const mlFeaturesText = document.getElementById('ml-features');
     const odaiDisplay = document.getElementById('odai-display');
 
     function resize() {
@@ -72,7 +73,7 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // 定数データ
+    // キーボード定数
     const keySize = 41;
     const waterSize = 20;
     const stay = { x: 0, y: 0 };
@@ -98,129 +99,21 @@
       { x: keySize * 3.5,  y: keySize * -0.2 }
     ];
 
-    // 状態変数
+    // 状態管理
     let touches = {};        
     let trails = {};         
     let stableFingers = [];
     let stableCenter = null;
     let adjustedCenters = [];
     let fourAngles = [];
-    let lineMovings = [false, false, false, false];
     let isLocked = false; 
 
-    let motionHistory = [];
-    const pointsLength = 4;
-
-    function updateMotionHistory(currentRotated) {
-      motionHistory.push(currentRotated);
-      if (motionHistory.length > 30) motionHistory.shift();
-    }
-
-    function isMoving() {
-      if (motionHistory.length < pointsLength) return [false, false, false, false];
-      let answer = [];
-      let recent = motionHistory.slice(-pointsLength);
-
-      for (let finger = 0; finger < 4; finger++) {
-        let pts = recent.map(f => f[finger]);
-        let lineLength = Math.hypot(pts[pts.length - 1].x - pts[0].x, pts[pts.length - 1].y - pts[0].y);
-        let speed = lineLength / pointsLength;
-
-        let start = pts[0]; let end = pts[pts.length - 1];
-        let baseLen = Math.hypot(end.x - start.x, end.y - start.y);
-        let sumDist = 0;
-
-        if (baseLen > 0) {
-          pts.forEach(p => {
-            let proj = ((p.x - start.x) * (end.x - start.x) + (p.y - start.y) * (end.y - start.y)) / baseLen;
-            let closest = { 
-              x: start.x + (end.x - start.x) * (proj / baseLen), 
-              y: start.y + (end.y - start.y) * (proj / baseLen) 
-            };
-            sumDist += Math.hypot(closest.x - p.x, closest.y - p.y);
-          });
-        }
-        let straightness = sumDist / pts.length;
-        answer.push(speed > 4 && straightness < 3);
-      }
-      return answer;
-    }
-
-    const weights = [1.0, 1.0, 1.0, 0.7];
-    let gestureTemplates = {};
-
-    function frameDistance(frameA, frameB) {
-      let sum = 0;
-      for (let i = 0; i < 4; i++) {
-        sum += Math.hypot(frameB[i].x - frameA[i].x, frameB[i].y - frameA[i].y) * weights[i];
-      }
-      return sum;
-    }
-
-    function multiDTW(seqA, seqB) {
-      const n = seqA.length; const m = seqB.length;
-      if (n === 0 || m === 0) return Infinity;
-      let dp = Array.from({ length: n }, () => Array(m).fill(Infinity));
-      dp[0][0] = frameDistance(seqA[0], seqB[0]);
-
-      for (let i = 0; i < n; i++) {
-        for (let j = 0; j < m; j++) {
-          let cost = frameDistance(seqA[i], seqB[j]);
-          if (i > 0) dp[i][j] = Math.min(dp[i][j], dp[i - 1][j] + cost);
-          if (j > 0) dp[i][j] = Math.min(dp[i][j], dp[i][j - 1] + cost);
-          if (i > 0 && j > 0) dp[i][j] = Math.min(dp[i][j], dp[i - 1][j - 1] + cost);
-        }
-      }
-      return dp[n - 1][m - 1];
-    }
-
-    function normalizeSequence(sequence) {
-      if (sequence.length === 0) return [];
-      const base = sequence[0][0];
-      let shifted = sequence.map(frame => frame.map(p => ({ x: p.x - base.x, y: p.y - base.y })));
-      let maxDist = 0;
-      shifted.forEach(frame => frame.forEach(p => {
-        let dist = Math.hypot(p.x, p.y);
-        if (dist > maxDist) maxDist = dist;
-      }));
-      if (maxDist === 0) return shifted;
-      return shifted.map(frame => frame.map(p => ({ x: p.x / maxDist, y: p.y / maxDist })));
-    }
-
-    function predictGesture(rawSequence) {
-      if (Object.keys(gestureTemplates).length === 0) return "テンプレートなし";
-      const normalizedInput = normalizeSequence(rawSequence);
-      let bestLabel = "判定不能"; let minScore = Infinity;
-      for (let label in gestureTemplates) {
-        let score = multiDTW(normalizedInput, gestureTemplates[label]);
-        if (score < minScore) { minScore = score; bestLabel = label; }
-      }
-      return { label: bestLabel, score: minScore };
-    }
-
-    // スプシ送信（安全対策入り）
-    async function sendToSpreadsheet(char, rawSequence) {
-      if (!GAS_URL || GAS_URL.trim() === "" || GAS_URL.startsWith("ここに")) {
-        console.log("GAS_URL未設定のため送信をスキップしました。データ自体は正常に取得されています。");
-        return;
-      }
-      const normalized = normalizeSequence(rawSequence);
-      try {
-        const response = await fetch(GAS_URL, {
-          method: "POST",
-          headers: { "Content-Type": "text/plain" },
-          body: JSON.stringify({ char: char, sequence: normalized })
-        });
-        const result = await response.json();
-        console.log("スプシ送信結果:", result);
-      } catch (error) {
-        console.error("スプシ送信エラー:", error);
-      }
-    }
+    // 機械学習用：ジェスチャ開始時と離した瞬間の生の座標
+    let strokeStarts = [null, null, null, null];
+    let strokeEnds = [null, null, null, null];
+    let isRecordingGesture = false;
 
     // モード管理
-    let isRecordingGesture = false;
-    let recordedStroke = []; 
     let isJuneMode = false;
     let juneTimer = null;
     const odaiList = ["あ", "い", "う", "え", "お", "か", "き", "く", "け", "こ"];
@@ -257,7 +150,63 @@
       return (e1.y > a.y) ? e1 : { x: a.x + (vx * Math.cos(-Math.PI*0.3) - vy * Math.sin(-Math.PI*0.3)) * 1.35, y: a.y + (vx * Math.sin(-Math.PI*0.3) + vy * Math.cos(-Math.PI*0.3)) * 1.35 };
     }
 
-    // タッチイベント
+    // 🛠️ 【新ロジック】最も動いた指3本の「最終着地点の相対座標」を抽出する
+    function extractMLFeatures(starts, ends, baseFingers, angles) {
+      let fingerMovements = [];
+
+      for (let i = 0; i < 4; i++) {
+        if (!starts[i] || !ends[i]) {
+          fingerMovements.push({ index: i, distance: 0, rx: 0, ry: 0 });
+          continue;
+        }
+
+        // 始点から終点までの単純な移動距離（ソートの基準用）
+        let totalDist = Math.hypot(ends[i].x - starts[i].x, ends[i].y - starts[i].y);
+
+        // 終点（着地点）が、ホームポジション(baseFingers)からどれだけズレているかのベクトル
+        let dx = ends[i].x - baseFingers[i].x;
+        let dy = ends[i].y - baseFingers[i].y;
+        let angle = angles[i];
+
+        // キーボードの傾きに合わせて最終着地点のズレ量を回転補正（ローカル座標化）
+        let rx = dx * Math.cos(angle) + dy * Math.sin(angle);
+        let ry = dx * Math.sin(angle) - dy * Math.cos(angle);
+
+        fingerMovements.push({
+          index: i,        // 指の識別ID (0:人差し指, 1:中指, 2:薬指, 3:小指)
+          distance: totalDist,
+          rx: parseFloat(rx.toFixed(2)), // ホームからの最終Xズレ
+          ry: parseFloat(ry.toFixed(2))  // ホームからの最終Yズレ
+        });
+      }
+
+      // 移動距離(distance)が大きい順番にソート
+      fingerMovements.sort((a, b) => b.distance - a.distance);
+
+      // 上位3本を抽出
+      return fingerMovements.slice(0, 3);
+    }
+
+    // スプシ送信（特徴量ベクトルを送信）
+    async function sendToSpreadsheet(char, features) {
+      if (!GAS_URL || GAS_URL.trim() === "" || GAS_URL.startsWith("ここに")) {
+        console.log(`GAS_URL未設定。スキップしました。[お題: ${char}] 特徴量:`, features);
+        return;
+      }
+      try {
+        const response = await fetch(GAS_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify({ char: char, features: features }) // 3本分の特徴量データをそのまま送信
+        });
+        const result = await response.json();
+        console.log("スプシ送信結果:", result);
+      } catch (error) {
+        console.error("スプシ送信エラー:", error);
+      }
+    }
+
+    // タッチイベント処理
     function handleTouch(e) {
       let currentTouches = {};
       Array.from(e.touches).forEach(t => {
@@ -270,25 +219,50 @@
 
       let fingerCount = Object.keys(touches).length;
       
+      // 指が触れた瞬間（ジェスチャー開始）の座標を保存
       if ((isLocked || isJuneMode) && fingerCount > 0 && !isRecordingGesture) {
         isRecordingGesture = true;
-        recordedStroke = [];
-        statusText.innerText = isJuneMode ? `お題【${currentOdai}】収集中...` : "ジェスチャー収集中...";
+        statusText.innerText = isJuneMode ? `お題【${currentOdai}】収集中...` : "タイピング検知中...";
+        
+        let pointsArray = Object.values(touches);
+        if (pointsArray.length >= 4) {
+          let sorted = sortByPrincipalAxis(pointsArray);
+          for(let i=0; i<4; i++) strokeStarts[i] = { x: sorted[i].x, y: sorted[i].y };
+        } else {
+          for(let i=0; i<4; i++) strokeStarts[i] = { x: stableFingers[i].x, y: stableFingers[i].y };
+        }
       }
 
+      // 動いている最中の現在の最新位置を常に終了座標の候補として上書き
+      if (isRecordingGesture && fingerCount > 0) {
+        let pointsArray = Object.values(touches);
+        if (pointsArray.length >= 4) {
+          let sorted = sortByPrincipalAxis(pointsArray);
+          for(let i=0; i<4; i++) strokeEnds[i] = { x: sorted[i].x, y: sorted[i].y };
+        }
+      }
+
+      // すべての指が完全に離れた瞬間（デッドストップ）
       if (fingerCount === 0 && isRecordingGesture) {
         isRecordingGesture = false;
         statusText.innerText = isJuneMode ? "6月モード稼働中" : "固定中 (待機)";
         
-        if (recordedStroke.length > 3) {
-          if (isJuneMode) {
-            sendToSpreadsheet(currentOdai, recordedStroke);
-            predictText.innerText = `送信トリガー -> [${currentOdai}]`;
-          } else {
-            let result = predictGesture(recordedStroke);
-            predictText.innerText = typeof result === 'object' ? `${result.label} (Score: ${result.score.toFixed(1)})` : result;
-          }
+        // 特徴量（トップ3本の最終座標）を抽出
+        let features = extractMLFeatures(strokeStarts, strokeEnds, stableFingers, fourAngles);
+        
+        // パネル表示用に整形
+        mlFeaturesText.innerHTML = features.map((f, rank) => 
+          `${rank+1}位: 指${f.index} (移動:${Math.round(f.distance)}px)<br>&nbsp;&nbsp;&nbsp;最終座標➔ X:${f.rx}, Y:${f.ry}`
+        ).join('<br>');
+
+        // 6月モードならデータを送信
+        if (isJuneMode) {
+          sendToSpreadsheet(currentOdai, features);
         }
+
+        // 初期化
+        strokeStarts = [null, null, null, null];
+        strokeEnds = [null, null, null, null];
       }
 
       Object.keys(trails).forEach(id => { if (!touches[id]) delete trails[id]; });
@@ -375,30 +349,14 @@
       }
 
       if (stableFingers.length === 4) {
-        let currentRotated = [];
-        for (let i = 0; i < 4; i++) {
-          let angle = fourAngles[i];
-          let activePt = points[i] || stableFingers[i]; 
-          let np = { x: activePt.x - stableFingers[i].x, y: activePt.y - stableFingers[i].y };
-          currentRotated.push({ 
-            x: np.x * Math.cos(angle) + np.y * Math.sin(angle), 
-            y: np.x * Math.sin(angle) - np.y * Math.cos(angle) 
-          });
-        }
-
-        updateMotionHistory(currentRotated);
-        lineMovings = isMoving();
-
-        if (isRecordingGesture) {
-          recordedStroke.push(currentRotated);
-        }
-
+        // 骨組み線
         ctx.strokeStyle = "grey"; ctx.lineWidth = 3;
         for (let i = 0; i < 4; i++) {
           ctx.beginPath(); ctx.moveTo(stableFingers[i].x, stableFingers[i].y);
           ctx.lineTo(adjustedCenters[i].x, adjustedCenters[i].y); ctx.stroke();
         }
 
+        // キー描画
         for (let i = 0; i < 4; i++) {
           let pos = stableFingers[i]; let angle = fourAngles[i];
           keysPositions[i].forEach((offset, m) => {
@@ -411,7 +369,7 @@
             ctx.beginPath(); ctx.roundRect(-keySize, -keySize, keySize * 2, keySize * 2, 10); ctx.fill(); ctx.stroke();
             ctx.fillStyle = "#000000";
             let label = keysNames[i][m] || "";
-            if (m === keysNames[i].length - 1) label = isLocked ? (lineMovings[i] ? "動いてる" : "待機") : "追従中";
+            if (m === keysNames[i].length - 1) label = isLocked ? "待機" : "追従中";
             ctx.font = `${m === keysNames[i].length - 1 ? keySize/4 : keySize/2}px sans-serif`;
             ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(label, 0, 0);
             ctx.restore();
@@ -424,6 +382,7 @@
         }
       }
 
+      // 視覚エフェクト
       Object.values(trails).forEach(pointsList => {
         pointsList.forEach((p, index) => {
           let t = index / pointsList.length;
