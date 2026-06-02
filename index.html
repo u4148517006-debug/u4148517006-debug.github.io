@@ -313,4 +313,211 @@
           let start = h.obj.strokeStarts[i]; let end = h.obj.strokeEnds[i];
           if (!start || !end) continue;
 
-          let totalDist = Math.hypot(end.x - start.x, end.y - start.
+          let totalDist = Math.hypot(end.x - start.x, end.y - start.y);
+          
+          let dx = end.x - h.obj.stableFingers[i].x;
+          let dy = end.y - h.obj.stableFingers[i].y;
+          let angle = h.obj.fourAngles[i];
+          
+          let rx = dx * Math.cos(angle) + dy * Math.sin(angle);
+          let ry = dx * Math.sin(angle) - dy * Math.cos(angle);
+
+          // 🔤 この指・この相対位置からアルファベットを個別に割り出す
+          let matchedLetter = detectLetterFromPosition(h.isLeft, i, rx, ry);
+
+          allMovements.push({
+            isLeft: h.isLeft, fingerIndex: i, distance: totalDist,
+            rx: parseFloat(rx.toFixed(1)), ry: parseFloat(ry.toFixed(1)),
+            letter: matchedLetter
+          });
+        }
+      });
+
+      allMovements.sort((a, b) => b.distance - a.distance);
+      let top2 = allMovements.slice(0, 2);
+
+      if (top2.length > 0 && top2[0].distance > 10) {
+        // 右上の小さな開発者用テキスト
+        mlFeaturesText.innerHTML = top2.map((f, r) => `${r+1}位:${f.letter}(移動:${f.distance.toFixed(1)})`).join(' | ');
+
+        // 文字の抽出
+        let let1 = top2[0].letter;
+        let let2 = top2[1] ? top2[1].letter : "";
+
+        // 特殊文字を削って合成
+        let cleanRoma1 = (let1 + let2).replace(/止/g, "");
+        let cleanRoma2 = (let2 + let1).replace(/止/g, ""); // 逆順パターンも許可
+
+        // ひらがな変換
+        let finalKana = romaKanaMap[cleanRoma1] || romaKanaMap[cleanRoma2] || "";
+
+        // 🎬 画面中央の表示を書き換える
+        resRoma.innerText = let2 ? `[ ${let1} ]  +  [ ${let2} ]` : `[ ${let1} ]`;
+        resKana.innerText = finalKana; // 対応するひらがながあれば特大表示、なければ空白
+
+        if (isJuneMode) { sendToSpreadsheet(currentOdai, top2); }
+      } else {
+        resKana.innerText = "";
+        resRoma.innerText = "（動きなし）";
+      }
+    }
+
+    // ⏱️ 0.5秒おき交代ループ
+    function runTimerSequence() {
+      if (!isTimerMode) return;
+
+      if (currentPhase === "START") {
+        resSignal.innerText = "🟢 START";
+        resSignal.className = "signal-start";
+        
+        [leftHand, rightHand].forEach(h => {
+          for (let i = 0; i < 4; i++) {
+            if (h.hasPosition && h.stableFingers[i]) {
+              h.strokeStarts[i] = { x: h.stableFingers[i].x, y: h.stableFingers[i].y };
+              h.strokeEnds[i] = null;
+            } else {
+              h.strokeStarts[i] = null; h.strokeEnds[i] = null;
+            }
+          }
+        });
+
+        currentPhase = "FINISH";
+        timerTimeoutId = setTimeout(runTimerSequence, 500);
+
+      } else {
+        resSignal.innerText = "🔴 FINISH";
+        resSignal.className = "signal-finish";
+
+        [leftHand, rightHand].forEach(h => {
+          for (let i = 0; i < 4; i++) {
+            if (h.hasPosition && h.stableFingers[i]) {
+              h.strokeEnds[i] = { x: h.stableFingers[i].x, y: h.stableFingers[i].y };
+            }
+          }
+        });
+
+        // ここで文字・ひらがな含めてすべての文字判定を実行
+        evaluateGlobalFlick();
+
+        currentPhase = "START";
+        timerTimeoutId = setTimeout(runTimerSequence, 500);
+      }
+    }
+
+    function stopTimerMode() {
+      isTimerMode = false;
+      if (timerTimeoutId) clearTimeout(timerTimeoutId);
+      resSignal.innerText = "-"; resSignal.className = "";
+      resKana.innerText = ""; resRoma.innerText = "1秒モードはオフです";
+    }
+
+    async function sendToSpreadsheet(char, top2Data) {
+      if (!GAS_URL) return;
+      try {
+        await fetch(GAS_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify({ char: char, top2: top2Data })
+        });
+      } catch (e) { console.error(e); }
+    }
+
+    window.addEventListener('touchstart', handleTouch);
+    window.addEventListener('touchmove', (e) => { handleTouch(e); e.preventDefault(); }, { passive: false });
+    window.addEventListener('touchend', handleTouch);
+
+    fab.addEventListener('touchstart', (e) => {
+      e.stopPropagation(); 
+      if (leftHand.hasPosition || rightHand.hasPosition) {
+        isLocked = !isLocked;
+        fab.className = isLocked ? "btn locked" : "btn";
+        fab.innerText = isLocked ? "🔒 固定中" : "🔓 ロック";
+        statusBadge.innerText = isLocked ? "位置固定" : "追従中";
+        statusBadge.style.background = isLocked ? "#ffc107" : "#eee";
+      }
+    });
+
+    timerModeBtn.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+      isTimerMode = !isTimerMode;
+      if (isTimerMode) {
+        timerModeBtn.className = "btn active";
+        timerModeBtn.innerText = "⏱️ 1秒モード: ON";
+        resRoma.innerText = "タイマー同期中..."; resKana.innerText = "";
+        currentPhase = "START";
+        runTimerSequence();
+      } else {
+        timerModeBtn.className = "btn";
+        timerModeBtn.innerText = "⏱️ 1秒モード: OFF";
+        stopTimerMode();
+      }
+    });
+
+    juneBtn.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+      isJuneMode = !isJuneMode;
+      if (isJuneMode) {
+        juneBtn.className = "btn active"; odaiDisplay.style.display = "block";
+        statusBadge.innerText = "6月モード"; statusBadge.style.background = "#e91e63"; statusBadge.style.color = "#fff";
+        isLocked = true; fab.className = "btn locked"; fab.innerText = "🔒 固定中";
+        odaiIndex = 0; nextOdai();
+        juneTimer = setInterval(nextOdai, 1000);
+      } else {
+        juneBtn.className = "btn"; odaiDisplay.style.display = "none";
+        statusBadge.innerText = "追従中"; statusBadge.style.background = "#eee"; statusBadge.style.color = "#000";
+        isLocked = false; fab.className = "btn"; fab.innerText = "🔓 ロック";
+        clearInterval(juneTimer);
+      }
+    });
+
+    function nextOdai() {
+      currentOdai = odaiList[odaiIndex]; odaiDisplay.innerText = currentOdai;
+      odaiIndex = (odaiIndex + 1) % odaiList.length;
+    }
+
+    function drawHandKeyboard(hand, posPositions, namesList, color) {
+      if (!hand.hasPosition || hand.stableFingers.length !== 4) return;
+      ctx.strokeStyle = "rgba(128,128,128,0.25)"; ctx.lineWidth = 2;
+      for (let i = 0; i < 4; i++) {
+        ctx.beginPath(); ctx.moveTo(hand.stableFingers[i].x, hand.stableFingers[i].y);
+        ctx.lineTo(hand.adjustedCenters[i].x, hand.adjustedCenters[i].y); ctx.stroke();
+      }
+      for (let i = 0; i < 4; i++) {
+        let pos = hand.stableFingers[i]; let angle = hand.fourAngles[i];
+        ctx.fillStyle = "rgba(0,0,0,0.2)"; ctx.font = "11px sans-serif";
+        ctx.fillText(`指${i}`, pos.x, pos.y - 42);
+
+        posPositions[i].forEach((offset, m) => {
+          let keyPos = { 
+            x: pos.x + (offset.x * Math.cos(angle) + offset.y * Math.sin(angle)), 
+            y: pos.y + (offset.x * Math.sin(angle) - offset.y * Math.cos(angle)) 
+          };
+          ctx.save(); ctx.translate(keyPos.x, keyPos.y); ctx.rotate(angle);
+          ctx.fillStyle = "#ffffff"; ctx.strokeStyle = color; ctx.lineWidth = 2;
+          ctx.beginPath(); ctx.roundRect(-keySize, -keySize, keySize * 2, keySize * 2, 8); ctx.fill(); ctx.stroke();
+          ctx.fillStyle = "#000000";
+          let label = namesList[i][m] || "";
+          ctx.font = `${m === namesList[i].length - 1 ? keySize/4 : keySize/2}px sans-serif`;
+          ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(label, 0, 0);
+          ctx.restore();
+        });
+      }
+    }
+
+    function loop() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      drawHandKeyboard(leftHand, leftKeysPositions, leftKeysNames, "rgba(33, 150, 243, 0.5)");
+      drawHandKeyboard(rightHand, rightKeysPositions, rightKeysNames, "rgba(244, 67, 54, 0.5)");
+      Object.values(trails).forEach(pointsList => {
+        pointsList.forEach((p, index) => {
+          let t = index / pointsList.length;
+          ctx.beginPath(); ctx.arc(p.x, p.y, (waterSize + waterSize * t) / 2, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(0, 150, 255, ${t * 0.4})`; ctx.fill();
+        });
+      });
+      requestAnimationFrame(loop);
+    }
+    loop();
+  </script>
+</body>
+</html>
