@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>両手用流水キーボード - 根本修正・完全対称版</title>
+  <title>両手用流水キーボード - 左右縦分割版</title>
   <style>
     body, html {
       margin: 0; padding: 0; overflow: hidden;
@@ -12,11 +12,11 @@
     }
     canvas { display: block; width: 100vw; height: 100vh; }
     
-    /* 📥 【変更】コントロールエリアを「画面上部」に集約 */
+    /* 📱 iPad横置き時の「画面上部（長辺）」にコントロールを一列に配置 */
     #header-control {
-      position: absolute; top: 0; left: 0; width: 100%; height: 60px;
+      position: absolute; top: 0; left: 0; width: 100%; height: 50px;
       background: rgba(255, 255, 255, 0.95);
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
       display: flex; align-items: center; justify-content: space-between;
       padding: 0 16px; box-sizing: border-box; z-index: 100;
     }
@@ -24,14 +24,14 @@
     .flex-left { display: flex; align-items: center; gap: 12px; }
     .flex-center { 
       font-size: 13px; font-family: monospace; line-height: 1.2; 
-      color: #333; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      color: #333; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     .flex-right { display: flex; align-items: center; gap: 12px; }
 
     .btn {
-      height: 40px; padding: 0 16px; color: white; border: none; border-radius: 8px; 
-      font-size: 14px; font-weight: bold; display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.1); cursor: pointer; touch-action: none;
+      height: 36px; padding: 0 14px; color: white; border: none; border-radius: 6px; 
+      font-size: 13px; font-weight: bold; display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.15); cursor: pointer; touch-action: none;
     }
     #fab { background-color: #4CAF50; }
     #fab.locked { background-color: #f44336; }
@@ -39,20 +39,20 @@
     #june-btn.active { background-color: #FF5722; }
 
     #status-badge {
-      font-size: 12px; background: #eee; padding: 6px 12px; border-radius: 4px; font-weight: bold;
+      font-size: 11px; background: #eee; padding: 4px 8px; border-radius: 4px; font-weight: bold;
     }
 
-    /* 🍇 6月モードのお題（特大表示） */
+    /* 🍇 6月モードのお題（中央奥に特大表示） */
     #odai-display {
-      position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%);
-      font-size: 120px; font-weight: bold; color: #E91E63;
-      pointer-events: none; z-index: 5; display: none;
+      position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
+      font-size: 140px; font-weight: bold; color: rgba(233, 30, 99, 0.15);
+      pointer-events: none; z-index: 0; display: none;
     }
 
-    /* デバッグ用：画面中央の分割線 */
+    /* 🛠️ 【最重要】画面を左右に真っ二つに分かつ縦の境界線 */
     #border-line {
-      position: absolute; top: 50%; left: 0; width: 100%; height: 1px;
-      background: rgba(0,0,0,0.1); pointer-events: none; z-index: 1;
+      position: absolute; top: 50px; left: 50%; width: 2px; height: calc(100% - 50px);
+      background: rgba(0, 0, 0, 0.15); pointer-events: none; z-index: 1;
     }
   </style>
 </head>
@@ -64,7 +64,7 @@
       <button id="fab" class="btn">🔓 ロック</button>
     </div>
     
-    <div id="ml-features" class="flex-center">両手エリア（上下）に4本指を置いてください</div>
+    <div id="ml-features" class="flex-center">左半分に左手、右半分に右手を置いてください</div>
     
     <div class="flex-right">
       <span id="status-badge">追従中</span>
@@ -77,8 +77,6 @@
 
   <script>
     const GAS_URL = "";
-    // 手首の入る向き（true: 右側から手が伸びる / false: 左側から手が伸びる）
-    const IS_HAND_FROM_RIGHT = true; 
 
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
@@ -94,8 +92,8 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // キーボード定数
-    const keySize = 35; 
+    // 流水キーボードの幾何配置定数
+    const keySize = 34; 
     const waterSize = 15;
     const stay = { x: 0, y: 0 };
     const moveUp = { x: keySize * -0.23, y: keySize * 2.2 };
@@ -103,24 +101,26 @@
     const moveLeft = { x: keySize * -2.14, y: 0 };
     const threeKeys = [stay, moveUp, moveDown, { x: moveUp.x * 2, y: moveUp.y * 2 }];
 
-    // ーーー 【変更】完全対称・反転キー配置マップ ーーー
-
-    // 【右手用：標準】(小指 -> 人差し指)
+    // 【右手用配置】（親指/人差し指が左側、小指が右側）
     const rightKeysPositions = [
+      [stay, moveUp, moveDown, moveLeft, { x: moveLeft.x + moveUp.x, y: moveLeft.y + moveUp.y }, { x: moveLeft.x + moveDown.x, y: moveLeft.y + moveDown.y }, { x: moveUp.x * 2, y: moveUp.y * 2 }], // 人差し指
+      threeKeys, // 中指
+      threeKeys, // 薬指
+      threeKeys  // 小指
+    ];
+    const rightKeysNames = [
+      ["J", "U", "M", "H", "Y", "N", "止"], ["K", "I", ",", "止"], ["L", "O", ".", "止"], [";", "P", "?", "止"]
+    ];
+
+    // 【左手用配置】（右手が鏡のように反転した完全対称。右側が人差し指で7キー、左に行くほど小指）
+    const leftKeysPositions = [
       threeKeys, // 小指
       threeKeys, // 薬指
       threeKeys, // 中指
       [stay, moveUp, moveDown, moveLeft, { x: moveLeft.x + moveUp.x, y: moveLeft.y + moveUp.y }, { x: moveLeft.x + moveDown.x, y: moveLeft.y + moveDown.y }, { x: moveUp.x * 2, y: moveUp.y * 2 }] // 人差し指
     ];
-    const rightKeysNames = [
-      [";", "P", "?", "止"], ["L", "O", ".", "止"], ["K", "I", ",", "止"], ["J", "U", "M", "H", "Y", "N", "止"]
-    ];
-
-    // 【左手用：右手と完全対称（反転）】(人差し指 -> 小指)
-    // キー名だけを逆順に割り当てる
-    const leftKeysPositions = rightKeysPositions;
     const leftKeysNames = [
-      ["F", "R", "V", "G", "T", "B", "止"], ["D", "E", "C", "止"], ["S", "W", "X", "止"], ["A", "Q", "Z", "止"]
+      ["A", "Q", "Z", "止"], ["S", "W", "X", "止"], ["D", "E", "C", "止"], ["F", "R", "V", "G", "T", "B", "止"]
     ];
 
     const centerAdjust = [
@@ -131,8 +131,8 @@
     ];
 
     class Hand {
-      constructor(isTopArea) {
-        this.isTopArea = isTopArea; 
+      constructor(isLeftHand) {
+        this.isLeftHand = isLeftHand; // true: 左側半分, false: 右側半分
         this.stableFingers = [];
         this.stableCenter = null;
         this.adjustedCenters = [];
@@ -157,7 +157,6 @@
     let trails = {};
     let isLocked = false;
 
-    // モード管理
     let isJuneMode = false;
     let juneTimer = null;
     const odaiList = ["あ", "い", "う", "え", "お", "か", "き", "く", "け", "こ"];
@@ -172,30 +171,29 @@
       return lerp(a, b, speed > 5 ? 5 : speed);
     }
 
-    // 🛠️ 【角度バグ根本修正】扇形（極座標）幾何学ソート
-    function sortFingersByAngle(pts) {
+    // 🛠️ 【横並び特化】角度ソートアルゴリズム
+    // 重心から見た各指の角度を並び替え、横画面（腕が下から伸びる状態）で破綻しないように配置
+    function sortFingersHorizontally(pts, isLeftHand) {
       if (pts.length < 4) return pts;
 
-      // 1. 4点全体の重心（中心）を割り出す
       let cx = 0, cy = 0;
       pts.forEach(p => { cx += p.x; cy += p.y; });
       cx /= pts.length; cy /= pts.length;
 
-      // 2. 重心から見た各点の「純粋な角度」を計算
       let ptsWithAngle = pts.map(p => {
         return { x: p.x, y: p.y, angle: Math.atan2(p.y - cy, p.x - cx) };
       });
 
-      // 3. 角度順（時計回り）にソート
+      // 角度順（時計回り）に並び替える
       ptsWithAngle.sort((a, b) => a.angle - b.angle);
 
-      // 4. 手の向きに応じて人差し指〜小指を固定する
-      if (IS_HAND_FROM_RIGHT) {
-        // 右から手が伸びる場合
+      // 横画面において、左手と右手で「小指〜人差し指」の物理的な並び順（左右）をマッピング
+      if (isLeftHand) {
+        // 左手：一番左が小指[0]、一番右（中央線寄り）が人差し指[3]
         return ptsWithAngle.map(p => ({ x: p.x, y: p.y }));
       } else {
-        // 左から手が伸びる場合（逆順）
-        return ptsWithAngle.reverse().map(p => ({ x: p.x, y: p.y }));
+        // 右手：一番左（中央線寄り）が人差し指[0]、一番右が小指[3]
+        return ptsWithAngle.map(p => ({ x: p.x, y: p.y }));
       }
     }
 
@@ -207,48 +205,52 @@
     }
 
     function handleTouch(e) {
-      let midY = canvas.height / 2;
-      let topPoints = [];
-      let bottomPoints = [];
+      let midX = canvas.width / 2; // 🎬 画面中央の縦境界線
+      let leftPoints = [];
+      let rightPoints = [];
       let activeIds = new Set();
 
       Array.from(e.touches).forEach(t => {
+        if (t.clientY < 50) return; // 最上部メニューバーでの誤動作防止
+
         activeIds.add(t.identifier);
         let pt = { x: t.clientX, y: t.clientY };
-        if (pt.y < midY) topPoints.push(pt); else bottomPoints.push(pt);
+        
+        // 縦線（midX）を基準に「左半分（左手）」「右半分（右手）」に完全に仕分ける
+        if (pt.x < midX) leftPoints.push(pt); else rightPoints.push(pt);
 
         if (!trails[t.identifier]) trails[t.identifier] = [];
         trails[t.identifier].push(pt);
         if (trails[t.identifier].length > 15) trails[t.identifier].shift();
       });
 
-      // 左手（上エリア）
-      if (!isLocked && topPoints.length >= 4) {
+      // ーーー 左手領域（画面左側） ーーー
+      if (!isLocked && leftPoints.length >= 4) {
         leftHand.isTracking = true;
-        let sorted = sortFingersByAngle(topPoints.slice(0, 4));
+        let sorted = sortFingersHorizontally(leftPoints.slice(0, 4), true);
         if (leftHand.stableFingers.length === 0) {
           leftHand.stableFingers = sorted.map(p => ({...p}));
           leftHand.strokeStarts = sorted.map(p => ({...p}));
         }
         leftHand.strokeEnds = sorted.map(p => ({...p}));
         updateHandGeometry(leftHand, sorted);
-      } else if (isLocked && leftHand.stableFingers.length === 4 && topPoints.length > 0) {
-        let sorted = sortFingersByAngle(topPoints);
+      } else if (isLocked && leftHand.stableFingers.length === 4 && leftPoints.length > 0) {
+        let sorted = sortFingersHorizontally(leftPoints, true);
         leftHand.strokeEnds = leftHand.stableFingers.map((sf, idx) => sorted[idx] || sf);
       }
 
-      // 右手（下エリア）
-      if (!isLocked && bottomPoints.length >= 4) {
+      // ーーー 右手領域（画面右側） ーーー
+      if (!isLocked && rightPoints.length >= 4) {
         rightHand.isTracking = true;
-        let sorted = sortFingersByAngle(bottomPoints.slice(0, 4));
+        let sorted = sortFingersHorizontally(rightPoints.slice(0, 4), false);
         if (rightHand.stableFingers.length === 0) {
           rightHand.stableFingers = sorted.map(p => ({...p}));
           rightHand.strokeStarts = sorted.map(p => ({...p}));
         }
         rightHand.strokeEnds = sorted.map(p => ({...p}));
         updateHandGeometry(rightHand, sorted);
-      } else if (isLocked && rightHand.stableFingers.length === 4 && bottomPoints.length > 0) {
-        let sorted = sortFingersByAngle(bottomPoints);
+      } else if (isLocked && rightHand.stableFingers.length === 4 && rightPoints.length > 0) {
+        let sorted = sortFingersHorizontally(rightPoints, false);
         rightHand.strokeEnds = rightHand.stableFingers.map((sf, idx) => sorted[idx] || sf);
       }
 
@@ -288,7 +290,7 @@
 
     function evaluateGlobalFlick() {
       let allMovements = [];
-      [ { label: "L", obj: leftHand }, { label: "R", obj: rightHand } ].forEach(h => {
+      [ { label: "左手(L)", obj: leftHand }, { label: "右手(R)", obj: rightHand } ].forEach(h => {
         for (let i = 0; i < 4; i++) {
           let start = h.obj.strokeStarts[i]; let end = h.obj.strokeEnds[i];
           if (!start || !end) continue;
@@ -315,9 +317,7 @@
           `${rank+1}位: ${f.hand}-指${f.fingerIndex} (X:${f.rx}, Y:${f.ry})`
         ).join(' | ');
         
-        if (isJuneMode) {
-          sendToSpreadsheet(currentOdai, top2);
-        }
+        if (isJuneMode) { sendToSpreadsheet(currentOdai, top2); }
       } else {
         mlFeaturesText.innerText = "待機中 / タップ検出";
       }
@@ -338,7 +338,6 @@
     window.addEventListener('touchmove', (e) => { handleTouch(e); e.preventDefault(); }, { passive: false });
     window.addEventListener('touchend', handleTouch);
 
-    // 🔒 ロックボタンのイベント
     fab.addEventListener('touchstart', (e) => {
       e.stopPropagation(); 
       if (leftHand.stableFingers.length === 4 || rightHand.stableFingers.length === 4) {
@@ -350,7 +349,6 @@
       }
     });
 
-    // 🍇 6月モードボタンのイベント
     juneBtn.addEventListener('touchstart', (e) => {
       e.stopPropagation();
       isJuneMode = !isJuneMode;
@@ -392,7 +390,7 @@
       for (let i = 0; i < 4; i++) {
         let pos = hand.stableFingers[i]; let angle = hand.fourAngles[i];
         
-        ctx.fillStyle = "rgba(0,0,0,0.15)"; ctx.font = "11px sans-serif";
+        ctx.fillStyle = "rgba(0,0,0,0.2)"; ctx.font = "11px sans-serif";
         ctx.fillText(`指${i}`, pos.x, pos.y - 42);
 
         posPositions[i].forEach((offset, m) => {
