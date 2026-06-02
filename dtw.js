@@ -105,3 +105,35 @@ export function predictGesture(rawSequence) {
   
   return { label: bestLabel, score: minScore };
 }
+
+// 先ほどコピーしたGASのURLをここに貼り付けてください
+const GAS_URL = "https://script.google.com/macros/s/AKfycbz7l2alJHdo7kbYUWgsOdZlDc8Ibnek913pwB-3VQQFU6XJePQjP7BdnOv5yJx5MhSG/exec";
+
+/**
+ * 取得した軌跡データをGoogleスプレッドシートへ送信する
+ */
+export async function sendToSpreadsheet(char, rawSequence) {
+  if (!GAS_URL || GAS_URL.startsWith("YOUR_")) {
+    console.log("GASのURLが設定されていません。");
+    return;
+  }
+  
+  const normalized = normalizeSequence(rawSequence);
+  
+  try {
+    const response = await fetch(GAS_URL, {
+      method: "POST",
+      headers: {
+        "Content-Type": "text/plain" // CORS制約を回避するためプレーンテキストで送るのがセオリーです
+      },
+      body: JSON.stringify({
+        char: char,
+        sequence: normalized
+      })
+    });
+    const result = await response.json();
+    console.log("スプシ送信結果:", result);
+  } catch (error) {
+    console.error("スプシ送信エラー:", error);
+  }
+}
