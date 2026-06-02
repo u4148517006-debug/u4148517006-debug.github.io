@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>両手用流水キーボード (iPad横置き想定)</title>
+  <title>両手用流水キーボード - 4点認識振り直し版</title>
   <style>
     body, html {
       margin: 0; padding: 0; overflow: hidden;
@@ -19,7 +19,6 @@
       pointer-events: none; font-size: 12px; z-index: 10;
       font-family: monospace; line-height: 1.4;
     }
-    /* 画面中央の分割境界線（デバッグ・目安用） */
     #border-line {
       position: absolute; top: 50%; left: 0; width: 100%; height: 1px;
       background: rgba(0,0,0,0.1); pointer-events: none; z-index: 1;
@@ -33,10 +32,15 @@
   
   <div id="info-panel">
     <div>【両手ステータス】</div>
-    <div id="ml-features">両手を置いて動かしてください</div>
+    <div id="ml-features">左右それぞれのエリアに4本指を置いてください</div>
   </div>
 
   <script>
+    // ===================================================
+    // 🔄 画面の回転向き設定 (trueで90度、falseで270度反転)
+    // ===================================================
+    const IS_90_DEGREE = true; 
+
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     const mlFeaturesText = document.getElementById('ml-features');
@@ -47,8 +51,8 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // キーボード定数設定
-    const keySize = 35; // 両手用に少しコンパクトに調整
+    // キーボード定数
+    const keySize = 35; 
     const waterSize = 15;
     const stay = { x: 0, y: 0 };
     const moveUp = { x: keySize * -0.23, y: keySize * 2.2 };
@@ -56,7 +60,6 @@
     const moveLeft = { x: keySize * -2.14, y: 0 };
     const threeKeys = [stay, moveUp, moveDown, { x: moveUp.x * 2, y: moveUp.y * 2 }];
 
-    // 左手用（上段エリア）のキー配置
     const leftKeysPositions = [
       [stay, moveUp, moveDown, moveLeft, { x: moveLeft.x + moveUp.x, y: moveLeft.y + moveUp.y }, { x: moveLeft.x + moveDown.x, y: moveLeft.y + moveDown.y }, { x: moveUp.x * 2, y: moveUp.y * 2 }],
       threeKeys, threeKeys, threeKeys
@@ -65,7 +68,6 @@
       ["J", "U", "M", "H", "Y", "N", "止"], ["K", "I", ",", "止"], ["L", "O", ".", "止"], [";", "P", "?", "止"]
     ];
 
-    // 右手用（下段エリア）のキー配置（※必要に応じて後から右手用の配列・キー名に変えられます）
     const rightKeysPositions = leftKeysPositions;
     const rightKeysNames = [
       ["F", "R", "V", "G", "T", "B", "止"], ["D", "E", "C", "止"], ["S", "W", "X", "止"], ["A", "Q", "Z", "止"]
@@ -78,10 +80,9 @@
       { x: keySize * 3.5,  y: keySize * -0.2 }
     ];
 
-    // 手ごとの独立したデータ構造
     class Hand {
       constructor(isTopArea) {
-        this.isTopArea = isTopArea; // true: 上半分（左手）, false: 下半分（右手）
+        this.isTopArea = isTopArea; 
         this.stableFingers = [];
         this.stableCenter = null;
         this.adjustedCenters = [];
@@ -90,7 +91,6 @@
         this.strokeEnds = [null, null, null, null];
         this.isTracking = false;
       }
-
       reset() {
         this.stableFingers = [];
         this.stableCenter = null;
@@ -102,11 +102,10 @@
       }
     }
 
-    let leftHand = new Hand(true);  // 画面上半分
-    let rightHand = new Hand(false); // 画面下半分
+    let leftHand = new Hand(true);  
+    let rightHand = new Hand(false); 
     let trails = {};
 
-    // 幾何計算ツール
     function lerp(a, b, t) { return { x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t }; }
     function distance(a, b) { return Math.hypot(b.x - a.x, b.y - a.y); }
     function archer(a, b) {
@@ -114,21 +113,23 @@
       let speed = Math.pow(dis / (4.3 * keySize), 4) / 58;
       return lerp(a, b, speed > 5 ? 5 : speed);
     }
-    function mean(pts) {
-      let sum = pts.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
-      return { x: sum.x / pts.length, y: sum.y / pts.length };
+
+    // 🛠️ 【完全再構築】縦並びバグを消し去る固定ソートプログラム
+    function sortFingersAbsolute(pts, isTopArea) {
+      // iPad横置き時、指のY座標（上下の並び）で物理的にソートする
+      // 常に一定の方向で上から下に並べる
+      let sorted = [...pts].sort((a, b) => a.y - b.y);
+
+      // 90度と270度で、人差し指[0]〜小指[3]の物理的な上下関係をひっくり返す
+      if (IS_90_DEGREE) {
+        // 90度：上が人差し指、下が小指になるよう配置（手の向きに応じて調整）
+        return sorted; 
+      } else {
+        // 270度：上下が逆転する場合
+        return sorted.reverse();
+      }
     }
-    function sortByPrincipalAxis(pts) {
-      const c = mean(pts);
-      let sxx = 0, syy = 0, sxy = 0;
-      pts.forEach(p => {
-        let dx = p.x - c.x; let dy = p.y - c.y;
-        sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
-      });
-      let theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
-      let axis = { x: Math.cos(theta), y: Math.sin(theta) };
-      return [...pts].sort((a, b) => ((a.x - c.x) * axis.x + (a.y - c.y) * axis.y) - ((b.x - c.x) * axis.x + (b.y - c.y) * axis.y));
-    }
+
     function circleCenterFrom2Points(a, b) {
       let vx = b.x - a.x; let vy = b.y - a.y;
       let r1 = { x: (vx * Math.cos(Math.PI*0.3) - vy * Math.sin(Math.PI*0.3)) * 1.35, y: (vx * Math.sin(Math.PI*0.3) + vy * Math.cos(Math.PI*0.3)) * 1.35 };
@@ -136,68 +137,55 @@
       return (e1.y > a.y) ? e1 : { x: a.x + (vx * Math.cos(-Math.PI*0.3) - vy * Math.sin(-Math.PI*0.3)) * 1.35, y: a.y + (vx * Math.sin(-Math.PI*0.3) + vy * Math.cos(-Math.PI*0.3)) * 1.35 };
     }
 
-    // タッチイベントを上下（左右の手）に振り分ける
     function handleTouch(e) {
       let midY = canvas.height / 2;
       let topPoints = [];
       let bottomPoints = [];
       let activeIds = new Set();
 
-      // 現在タッチされているすべての座標を上下に仕分ける
       Array.from(e.touches).forEach(t => {
         activeIds.add(t.identifier);
         let pt = { x: t.clientX, y: t.clientY };
-        
-        if (pt.y < midY) {
-          topPoints.push(pt);
-        } else {
-          bottomPoints.push(pt);
-        }
+        if (pt.y < midY) topPoints.push(pt); else bottomPoints.push(pt);
 
         if (!trails[t.identifier]) trails[t.identifier] = [];
         trails[t.identifier].push(pt);
         if (trails[t.identifier].length > 15) trails[t.identifier].shift();
       });
 
-      // ーーー 左手（上半分）のトラッキング ーーー
+      // 左手（上エリア）4点検知で新ロジック適用
       if (topPoints.length >= 4) {
         leftHand.isTracking = true;
-        let sorted = sortByPrincipalAxis(topPoints).slice(0, 4);
-        
+        let sorted = sortFingersAbsolute(topPoints.slice(0, 4), true);
         if (leftHand.stableFingers.length === 0) {
           leftHand.stableFingers = sorted.map(p => ({...p}));
-          leftHand.strokeStarts = sorted.map(p => ({...p})); // 始点記録
+          leftHand.strokeStarts = sorted.map(p => ({...p}));
         }
-        // 常に最新を終点候補にする
         leftHand.strokeEnds = sorted.map(p => ({...p}));
         updateHandGeometry(leftHand, sorted);
       }
 
-      // ーーー 右手（下半分）のトラッキング ーーー
+      // 右手（下エリア）4点検知で新ロジック適用
       if (bottomPoints.length >= 4) {
         rightHand.isTracking = true;
-        let sorted = sortByPrincipalAxis(bottomPoints).slice(0, 4);
-        
+        let sorted = sortFingersAbsolute(bottomPoints.slice(0, 4), false);
         if (rightHand.stableFingers.length === 0) {
           rightHand.stableFingers = sorted.map(p => ({...p}));
-          rightHand.strokeStarts = sorted.map(p => ({...p})); // 始点記録
+          rightHand.strokeStarts = sorted.map(p => ({...p}));
         }
         rightHand.strokeEnds = sorted.map(p => ({...p}));
         updateHandGeometry(rightHand, sorted);
       }
 
-      // 全ての指が画面から離れたら（デッドストップ）、両手合わせて「最も動いた2本」を判定
       if (e.touches.length === 0) {
         evaluateGlobalFlick();
         leftHand.reset();
         rightHand.reset();
       }
 
-      // 離れた指の軌跡エフェクトを消去
       Object.keys(trails).forEach(id => { if (!activeIds.has(Number(id))) delete trails[id]; });
     }
 
-    // 手の傾きや中心点を滑らかに更新する関数
     function updateHandGeometry(hand, realFingers) {
       let realCenter = circleCenterFrom2Points(realFingers[0], realFingers[3]);
       if (!hand.stableCenter) {
@@ -221,37 +209,27 @@
       }
     }
 
-    // ★【中心ロジック】両手全8本の中から、最も動いたトップ2の指を特定する
     function evaluateGlobalFlick() {
       let allMovements = [];
-
-      // 両手分（計8本分）のループを回して移動距離を集計
-      [ { handLabel: "左手", handObj: leftHand }, { handLabel: "右手", handObj: rightHand } ].forEach(h => {
+      [ { label: "左手", obj: leftHand }, { label: "右手", obj: rightHand } ].forEach(h => {
         for (let i = 0; i < 4; i++) {
-          let start = h.handObj.strokeStarts[i];
-          let end = h.handObj.strokeEnds[i];
+          let start = h.obj.strokeStarts[i]; let end = h.obj.strokeEnds[i];
           if (!start || !end) continue;
 
           let totalDist = Math.hypot(end.x - start.x, end.y - start.y);
-          
-          // ホームポジションからの最終ズレ量
-          let dx = end.x - h.handObj.stableFingers[i].x;
-          let dy = end.y - h.handObj.stableFingers[i].y;
-          let angle = h.handObj.fourAngles[i];
+          let dx = end.x - h.obj.stableFingers[i].x;
+          let dy = end.y - h.obj.stableFingers[i].y;
+          let angle = h.obj.fourAngles[i];
           let rx = dx * Math.cos(angle) + dy * Math.sin(angle);
           let ry = dx * Math.sin(angle) - dy * Math.cos(angle);
 
           allMovements.push({
-            hand: h.handLabel,
-            fingerIndex: i,
-            distance: totalDist,
-            rx: parseFloat(rx.toFixed(1)),
-            ry: parseFloat(ry.toFixed(1))
+            hand: h.label, fingerIndex: i, distance: totalDist,
+            rx: parseFloat(rx.toFixed(1)), ry: parseFloat(ry.toFixed(1))
           });
         }
       });
 
-      // 全体の移動距離が大きい順にソート
       allMovements.sort((a, b) => b.distance - a.distance);
       let top2 = allMovements.slice(0, 2);
 
@@ -260,7 +238,7 @@
           `${rank+1}位: ${f.hand}・指${f.fingerIndex} (移動:${Math.round(f.distance)}px)<br>&nbsp;&nbsp;&nbsp;最終相対座標 ➔ X: ${f.rx}, Y: ${f.ry}`
         ).join('<br><br>');
       } else {
-        mlFeaturesText.innerText = "タップ（大きな移動なし）";
+        mlFeaturesText.innerText = "タップ";
       }
     }
 
@@ -268,20 +246,22 @@
     window.addEventListener('touchmove', (e) => { handleTouch(e); e.preventDefault(); }, { passive: false });
     window.addEventListener('touchend', handleTouch);
 
-    // キーボード一式を描画するヘルパー
     function drawHandKeyboard(hand, posPositions, namesList, color) {
       if (hand.stableFingers.length !== 4) return;
 
-      // 骨組み線
       ctx.strokeStyle = "rgba(128,128,128,0.4)"; ctx.lineWidth = 2;
       for (let i = 0; i < 4; i++) {
         ctx.beginPath(); ctx.moveTo(hand.stableFingers[i].x, hand.stableFingers[i].y);
         ctx.lineTo(hand.adjustedCenters[i].x, hand.adjustedCenters[i].y); ctx.stroke();
       }
 
-      // 各キーの四角形
       for (let i = 0; i < 4; i++) {
         let pos = hand.stableFingers[i]; let angle = hand.fourAngles[i];
+        
+        // デバッグ用に指のインデックス番号(0~3)をうっすら描画
+        ctx.fillStyle = "rgba(0,0,0,0.2)"; ctx.font = "12px sans-serif";
+        ctx.fillText(`指${i}`, pos.x, pos.y - 45);
+
         posPositions[i].forEach((offset, m) => {
           let keyPos = { 
             x: pos.x + (offset.x * Math.cos(angle) + offset.y * Math.sin(angle)), 
@@ -297,23 +277,13 @@
           ctx.restore();
         });
       }
-
-      if (hand.stableCenter) {
-        ctx.strokeStyle = color; ctx.lineWidth = 2; ctx.setLineDash([4, 4]);
-        ctx.beginPath(); ctx.arc(hand.stableCenter.x, hand.stableCenter.y, 100, 0, Math.PI * 2); ctx.stroke();
-        ctx.setLineDash([]);
-      }
     }
 
-    // メインループ
     function loop() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-      // 上段（左手：青ベース）と 下段（右手：赤ベース）を描画
       drawHandKeyboard(leftHand, leftKeysPositions, leftKeysNames, "rgba(33, 150, 243, 0.6)");
       drawHandKeyboard(rightHand, rightKeysPositions, rightKeysNames, "rgba(244, 67, 54, 0.6)");
 
-      // タッチエフェクト
       Object.values(trails).forEach(pointsList => {
         pointsList.forEach((p, index) => {
           let t = index / pointsList.length;
@@ -321,7 +291,6 @@
           ctx.fillStyle = `rgba(0, 150, 255, ${t * 0.4})`; ctx.fill();
         });
       });
-
       requestAnimationFrame(loop);
     }
     loop();
