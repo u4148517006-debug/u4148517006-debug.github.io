@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>両手用流水キーボード - 1秒自動判定モード</title>
+  <title>両手用流水キーボード - 1秒文字判定復活版</title>
   <style>
     body, html {
       margin: 0; padding: 0; overflow: hidden;
@@ -12,7 +12,6 @@
     }
     canvas { display: block; width: 100vw; height: 100vh; }
     
-    /* 📱 iPad横置き時の「画面上部」コントロールバー */
     #header-control {
       position: absolute; top: 0; left: 0; width: 100%; height: 50px;
       background: rgba(255, 255, 255, 0.95);
@@ -26,31 +25,40 @@
       font-size: 13px; font-weight: bold; display: flex; align-items: center; justify-content: center;
       box-shadow: 0 1px 4px rgba(0,0,0,0.15); cursor: pointer; touch-action: none;
     }
-    #june-btn { background-color: #9C27B0; }
-    #june-btn.active { background-color: #FF5722; }
     #fab { background-color: #4CAF50; }
     #fab.locked { background-color: #f44336; }
-    
-    /* 🕒 【新設】1秒モードボタン */
+    #june-btn { background-color: #9C27B0; }
+    #june-btn.active { background-color: #FF5722; }
     #timer-mode-btn { background-color: #00bcd4; }
-    #timer-mode-btn.active { background-color: #ff9800; animation: blink 1s infinite; }
+    #timer-mode-btn.active { background-color: #ff9800; }
 
     #ml-features {
       font-size: 13px; font-family: monospace; color: #333;
-      margin-left: auto; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+      margin-left: auto; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     }
     #status-badge {
       font-size: 11px; background: #eee; padding: 4px 8px; border-radius: 4px; font-weight: bold;
     }
 
-    /* 🔤 【新設】画面中央上の判定結果表示エリア（分断線の真上） */
+    /* 🎬 画面中央上の特大文字判定エリア（分断線の真上、コントロールバーのすぐ下） */
     #result-display {
       position: absolute; top: 60px; left: 50%; transform: translateX(-50%);
       display: flex; flex-direction: column; align-items: center; justify-content: center;
       pointer-events: none; z-index: 90; text-align: center; font-weight: bold;
+      background: rgba(255, 255, 255, 0.9); padding: 12px 30px; border-radius: 12px;
+      min-width: 380px; box-shadow: 0 6px 20px rgba(0,0,0,0.1);
     }
-    #res-kana { font-size: 72px; color: #1e88e5; line-height: 1.1; }
-    #res-roma { font-size: 28px; color: #555; letter-spacing: 2px; }
+    
+    #res-signal { 
+      font-size: 26px; font-weight: 900; margin-bottom: 4px; letter-spacing: 2px;
+    }
+    .signal-start { color: #4CAF50; }
+    .signal-finish { color: #f44336; }
+
+    /* ひらがなを最優先でドカンと大きく表示 */
+    #res-kana { font-size: 80px; color: #1e88e5; font-family: sans-serif; line-height: 1; margin: 5px 0; min-height: 80px; }
+    /* アルファベット2つを表示 */
+    #res-roma { font-size: 26px; color: #444; font-family: monospace; letter-spacing: 3px; }
 
     #odai-display {
       position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%);
@@ -58,13 +66,10 @@
       pointer-events: none; z-index: 0; display: none;
     }
 
-    /* 🎬 画面中央をきれいに真っ二つに分かつ縦の境界線 */
     #border-line {
       position: absolute; top: 50px; left: 50%; width: 2px; height: calc(100% - 50px);
       background: rgba(0, 0, 0, 0.15); pointer-events: none; z-index: 1;
     }
-
-    @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
   </style>
 </head>
 <body>
@@ -79,9 +84,8 @@
   </div>
 
   <div id="result-display">
-    <div id="res-kana"></div>
-    <div id="res-roma"></div>
-  </div>
+    <div id="res-signal">-</div>
+    <div id="res-kana"></div> <div id="res-roma">1秒モードをONにしてください</div> </div>
 
   <canvas id="canvas"></canvas>
   <div id="border-line"></div>
@@ -98,6 +102,7 @@
     const statusBadge = document.getElementById('status-badge');
     const mlFeaturesText = document.getElementById('ml-features');
     const odaiDisplay = document.getElementById('odai-display');
+    const resSignal = document.getElementById('res-signal');
     const resKana = document.getElementById('res-kana');
     const resRoma = document.getElementById('res-roma');
 
@@ -107,7 +112,7 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // 流水キーボード配置定数
+    // 配置定数
     const keySize = 34; 
     const waterSize = 15;
     const stay = { x: 0, y: 0 };
@@ -116,37 +121,29 @@
     const moveDown = { x: keySize * 0.23, y: keySize * -2.2 };
     const moveLeft = { x: keySize * -2.14, y: 0 }; 
     const threeKeys = [stay, moveUp, moveDown, { x: moveUp.x * 2, y: moveUp.y * 2 }];
-
     const moveLeftForLeftHand = { x: keySize * 2.14, y: 0 }; 
 
-    // 【右手位置】人差し指(指0)〜小指(指3)
+    // 右手位置
     const rightKeysPositions = [
       [stay, moveUp, moveDown, moveLeft, { x: moveLeft.x + moveUp.x, y: moveLeft.y + moveUp.y }, { x: moveLeft.x + moveDown.x, y: moveLeft.y + moveDown.y }, { x: moveUp.x * 2, y: moveUp.y * 2 }], 
       threeKeys, threeKeys, threeKeys
     ];
 
-    // 【左手位置】小指(指0)〜人差し指(指3)（右側展開仕様）
+    // 左手位置
     const leftKeysPositions = [
       threeKeys, threeKeys, threeKeys,
       [stay, moveUp, moveDown, moveLeftForLeftHand, { x: moveLeftForLeftHand.x + moveUp.x, y: moveLeftForLeftHand.y + moveUp.y }, { x: moveLeftForLeftHand.x + moveDown.x, y: moveLeftForLeftHand.y + moveDown.y }, { x: moveUp.x * 2, y: moveUp.y * 2 }] 
     ];
 
-    // 🔤 文字配列（中身は自由に変更してください）
+    // 🔤 文字配列（ここを自由にいじってもロジックは壊れません）
     const leftKeysNames = [
-      ["A", "Q", "Z", "止"], 
-      ["S", "W", "X", "止"], 
-      ["D", "E", "C", "止"], 
-      ["F", "R", "V", "G", "T", "B", "止"]  
+      ["A", "Q", "Z", "止"], ["S", "W", "X", "止"], ["D", "E", "C", "止"], ["F", "R", "V", "G", "T", "B", "止"]  
     ];
-
     const rightKeysNames = [
-      ["J", "U", "M", "H", "Y", "N", "止"], 
-      ["K", "I", ",", "止"], 
-      ["L", "O", ".", "止"], 
-      [";", "P", "?", "止"]  
+      ["J", "U", "M", "H", "Y", "N", "止"], ["K", "I", ",", "止"], ["L", "O", ".", "止"], [";", "P", "?", "止"]  
     ];
 
-    // 🗺️ 子音＋母音のローマ字ひらがな変換マップ
+    // 🗺️ 子音＋母音のローマ字ひらがな変換対応表（必要に応じて自由に拡張してください）
     const romaKanaMap = {
       "AI":"あい","AU":"あう","AK":"か","AI":"き","AU":"く","AE":"け","AO":"こ",
       "SA":"さ","SI":"し","SU":"す","SE":"せ","SO":"そ",
@@ -157,14 +154,13 @@
       "YA":"や","YU":"ゆ","YO":"よ",
       "RA":"ら","RI":"り","RU":"る","RE":"れ","RO":"ろ",
       "WA":"わ","WO":"を","NN":"ん",
-      // ※必要に応じて、ユーザー様の配列ルールに合わせてここを拡充してください
+      "FA":"ふぁ","FI":"ふぃ","FE":"ふぇ","FO":"ふぉ",
+      "KA":"か","KI":"き","KU":"く","KE":"け","KO":"こ"
     };
 
     const centerAdjust = [
-      { x: keySize * -3.7, y: keySize * -0.2 },
-      { x: keySize * -1.3, y: keySize * -1.3 },
-      { x: keySize * 1.3,  y: keySize * -1.3 },
-      { x: keySize * 3.5,  y: keySize * -0.2 }
+      { x: keySize * -3.7, y: keySize * -0.2 }, { x: keySize * -1.3, y: keySize * -1.3 },
+      { x: keySize * 1.3,  y: keySize * -1.3 }, { x: keySize * 3.5,  y: keySize * -0.2 }
     ];
 
     class Hand {
@@ -197,9 +193,9 @@
     let odaiIndex = 0;
     let currentOdai = "";
 
-    // ⏱️ 1秒モード用管理変数
     let isTimerMode = false;
-    let mainLoopInterval = null;
+    let timerTimeoutId = null; 
+    let currentPhase = "START"; 
 
     function lerp(a, b, t) { return { x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t }; }
     function distance(a, b) { return Math.hypot(b.x - a.x, b.y - a.y); }
@@ -209,9 +205,7 @@
       return lerp(a, b, speed > 5 ? 5 : speed);
     }
 
-    function sortFingersAbsoluteX(pts) {
-      return [...pts].sort((a, b) => a.x - b.x);
-    }
+    function sortFingersAbsoluteX(pts) { return [...pts].sort((a, b) => a.x - b.x); }
 
     function circleCenterFrom2Points(a, b) {
       let vx = b.x - a.x; let vy = b.y - a.y;
@@ -228,10 +222,8 @@
 
       Array.from(e.touches).forEach(t => {
         if (t.clientY < 50) return; 
-
         activeIds.add(t.identifier);
         let pt = { x: t.clientX, y: t.clientY };
-        
         if (pt.x < midX) leftPoints.push(pt); else rightPoints.push(pt);
 
         if (!trails[t.identifier]) trails[t.identifier] = [];
@@ -239,43 +231,38 @@
         if (trails[t.identifier].length > 15) trails[t.identifier].shift();
       });
 
-      // 左手領域
       if (!isLocked && leftPoints.length >= 4) {
         leftHand.isTracking = true; leftHand.hasPosition = true;
         let sorted = sortFingersAbsoluteX(leftPoints.slice(0, 4));
         if (leftHand.stableFingers.length === 0) {
           leftHand.stableFingers = sorted.map(p => ({...p}));
-          leftHand.strokeStarts = sorted.map(p => ({...p}));
+          if (!isTimerMode) leftHand.strokeStarts = sorted.map(p => ({...p}));
         }
-        leftHand.strokeEnds = sorted.map(p => ({...p}));
+        if (!isTimerMode) leftHand.strokeEnds = sorted.map(p => ({...p}));
         updateHandGeometry(leftHand, sorted);
       } else if (leftHand.stableFingers.length === 4 && leftPoints.length > 0) {
         let sorted = sortFingersAbsoluteX(leftPoints);
-        leftHand.strokeEnds = leftHand.stableFingers.map((sf, idx) => sorted[idx] || sf);
+        if (!isTimerMode) leftHand.strokeEnds = leftHand.stableFingers.map((sf, idx) => sorted[idx] || sf);
       }
 
-      // 右手領域
       if (!isLocked && rightPoints.length >= 4) {
         rightHand.isTracking = true; rightHand.hasPosition = true;
         let sorted = sortFingersAbsoluteX(rightPoints.slice(0, 4));
         if (rightHand.stableFingers.length === 0) {
           rightHand.stableFingers = sorted.map(p => ({...p}));
-          rightHand.strokeStarts = sorted.map(p => ({...p}));
+          if (!isTimerMode) rightHand.strokeStarts = sorted.map(p => ({...p}));
         }
-        rightHand.strokeEnds = sorted.map(p => ({...p}));
+        if (!isTimerMode) rightHand.strokeEnds = sorted.map(p => ({...p}));
         updateHandGeometry(rightHand, sorted);
       } else if (rightHand.stableFingers.length === 4 && rightPoints.length > 0) {
         let sorted = sortFingersAbsoluteX(rightPoints);
-        rightHand.strokeEnds = rightHand.stableFingers.map((sf, idx) => sorted[idx] || sf);
+        if (!isTimerMode) rightHand.strokeEnds = rightHand.stableFingers.map((sf, idx) => sorted[idx] || sf);
       }
 
-      // 通常モード時のみ、指が完全に離れたら即座に判定。1秒モード時はインターバル側で処理。
       if (e.touches.length === 0 && !isTimerMode) {
         evaluateGlobalFlick();
-        leftHand.clearStroke();
-        rightHand.clearStroke();
+        leftHand.clearStroke(); rightHand.clearStroke();
       }
-
       Object.keys(trails).forEach(id => { if (!activeIds.has(Number(id))) delete trails[id]; });
     }
 
@@ -287,7 +274,6 @@
         let p = Math.atan2(hand.adjustedCenters[1].y - hand.stableFingers[1].y, hand.adjustedCenters[1].x - hand.stableFingers[1].x) + Math.PI / 2;
         hand.fourAngles = [p, p, p, p];
       }
-
       for (let i = 0; i < 4; i++) hand.stableFingers[i] = archer(hand.stableFingers[i], realFingers[i]);
       hand.stableCenter = archer(hand.stableCenter, realCenter);
       let centerAngle = Math.atan2(hand.stableFingers[1].y - hand.stableCenter.y, hand.stableFingers[1].x - hand.stableCenter.x) + Math.PI / 2;
@@ -302,229 +288,29 @@
       }
     }
 
-    // 🎯 相対最終座標からどのキー（アルファベット）が選ばれたかを判定する関数
-    function detectLetterFromPosition(hand, fingerIndex, rx, ry) {
-      const positions = hand.isLeftHand ? leftKeysPositions[fingerIndex] : rightKeysPositions[fingerIndex];
-      const names = hand.isLeftHand ? leftKeysNames[fingerIndex] : rightKeysNames[fingerIndex];
-      
-      let minDst = Infinity;
-      let matchedIndex = 0;
+    // 🎯 相対座標（rx, ry）からどの文字キーの設計位置に一番近いかを逆引きする安全システム
+    function detectLetterFromPosition(isLeftHand, fingerIndex, rx, ry) {
+      const positions = isLeftHand ? leftKeysPositions[fingerIndex] : rightKeysPositions[fingerIndex];
+      const names = isLeftHand ? leftKeysNames[fingerIndex] : rightKeysNames[fingerIndex];
+      if (!positions || !names) return "";
 
-      // 各キーの設計上の相対位置オフセットと、実際の移動rx, ryの距離が一番近いものを探す
+      let minDst = Infinity; let matchedIndex = 0;
       positions.forEach((offset, idx) => {
         let dst = Math.hypot(rx - offset.x, ry - offset.y);
-        if (dst < minDst) {
-          minDst = dst;
-          matchedIndex = idx;
-        }
+        if (dst < minDst) { minDst = dst; matchedIndex = idx; }
       });
       return names[matchedIndex] || "";
     }
 
-    // 🔍 動きのあったすべての指をスキャンして上位2本を特定し、文字を処理する
+    // 🔍 一番動いた2本の指を特定し、文字を抽出して中央上部にドカンと表示する
     function evaluateGlobalFlick() {
       let allMovements = [];
       
-      [ { label: "左手(L)", obj: leftHand }, { label: "右手(R)", obj: rightHand } ].forEach(h => {
+      [ { isLeft: true, label: "左(L)", obj: leftHand }, { isLeft: false, label: "右(R)", obj: rightHand } ].forEach(h => {
         if (!h.obj.hasPosition) return;
         
         for (let i = 0; i < 4; i++) {
           let start = h.obj.strokeStarts[i]; let end = h.obj.strokeEnds[i];
           if (!start || !end) continue;
 
-          let totalDist = Math.hypot(end.x - start.x, end.y - start.y);
-          let dx = end.x - h.obj.stableFingers[i].x;
-          let dy = end.y - h.obj.stableFingers[i].y;
-          let angle = h.obj.fourAngles[i];
-          
-          // 基準位置からの「最終位置」の相対ベクトルを計算
-          let rx = dx * Math.cos(angle) + dy * Math.sin(angle);
-          let ry = dx * Math.sin(angle) - dy * Math.cos(angle);
-
-          // アルファベットを個別特定
-          let letter = detectLetterFromPosition(h.obj, i, rx, ry);
-
-          allMovements.push({
-            hand: h.label, fingerIndex: i, distance: totalDist,
-            rx: parseFloat(rx.toFixed(1)), ry: parseFloat(ry.toFixed(1)),
-            letter: letter
-          });
-        }
-      });
-
-      // 動いた距離の大きい順にソート
-      allMovements.sort((a, b) => b.distance - a.distance);
-      let top2 = allMovements.slice(0, 2);
-
-      if (top2.length > 0 && top2[0].distance > 12) {
-        mlFeaturesText.innerHTML = top2.map((f, rank) => 
-          `${rank+1}位: ${f.hand}-指${f.fingerIndex} [${f.letter}]`
-        ).join(' | ');
-
-        // 🔤 2つのアルファベットを合成・抽出して画面中央上に表示
-        let letter1 = top2[0].letter;
-        let letter2 = top2[1] ? top2[1].letter : "";
-        
-        // 「止」などの特殊文字を除外して結合
-        let combinedRoma = (letter1 + letter2).replace(/止/g, "");
-        let combinedRomaAlt = (letter2 + letter1).replace(/止/g, ""); // 左右の入力順が逆でも対応できるように
-
-        // ひらがな変換マップの検索
-        let finalKana = romaKanaMap[combinedRoma] || romaKanaMap[combinedRomaAlt] || "??";
-        
-        // 画面中央上部への特大表示反映
-        resRoma.innerText = `[ ${letter1} ]  [ ${letter2} ]`;
-        resKana.innerText = finalKana !== "??" ? finalKana : "";
-
-        if (isJuneMode) { sendToSpreadsheet(currentOdai, top2); }
-      }
-    }
-
-    // ⏱️ 1秒ごとの定期タイマー処理
-    function startOneSecondEvaluator() {
-      mainLoopInterval = setInterval(() => {
-        // 1秒間の蓄積された指の動きから最上位2本を確定して画面中央上に表示
-        evaluateGlobalFlick();
-
-        // 次の1秒のためにストローク情報だけをリセット（キーの位置表示はキープ）
-        // ただし、現在まだ画面に指が触れている場合は、現在の位置を「新しい始点」にして滑らかに繋ぐ
-        [leftHand, rightHand].forEach(h => {
-          if (h.isTracking) {
-            for(let i=0; i<4; i++) {
-              if (h.strokeEnds[i]) h.strokeStarts[i] = {...h.strokeEnds[i]};
-            }
-          } else {
-            h.clearStroke();
-          }
-        });
-      }, 1000);
-    }
-
-    function stopOneSecondEvaluator() {
-      if (mainLoopInterval) clearInterval(mainLoopInterval);
-    }
-
-    async function sendToSpreadsheet(char, top2Data) {
-      if (!GAS_URL) return;
-      try {
-        await fetch(GAS_URL, {
-          method: "POST",
-          headers: { "Content-Type": "text/plain" },
-          body: JSON.stringify({ char: char, top2: top2Data })
-        });
-      } catch (e) { console.error(e); }
-    }
-
-    window.addEventListener('touchstart', handleTouch);
-    window.addEventListener('touchmove', (e) => { handleTouch(e); e.preventDefault(); }, { passive: false });
-    window.addEventListener('touchend', handleTouch);
-
-    // ロックボタン
-    fab.addEventListener('touchstart', (e) => {
-      e.stopPropagation(); 
-      if (leftHand.hasPosition || rightHand.hasPosition) {
-        isLocked = !isLocked;
-        fab.className = isLocked ? "btn locked" : "btn";
-        fab.innerText = isLocked ? "🔒 固定中" : "🔓 ロック";
-        statusBadge.innerText = isLocked ? "位置固定" : "追従中";
-        statusBadge.style.background = isLocked ? "#ffc107" : "#eee";
-      }
-    });
-
-    // 🕒 【新設】1秒タイマーモードボタンのアクション
-    timerModeBtn.addEventListener('touchstart', (e) => {
-      e.stopPropagation();
-      isTimerMode = !isTimerMode;
-      if (isTimerMode) {
-        timerModeBtn.className = "btn active";
-        timerModeBtn.innerText = "⏱️ 1秒モード: ON";
-        resKana.innerText = "-"; resRoma.innerText = "タイマースタート";
-        startOneSecondEvaluator();
-      } else {
-        timerModeBtn.className = "btn";
-        timerModeBtn.innerText = "⏱️ 1秒モード: OFF";
-        resKana.innerText = ""; resRoma.innerText = "";
-        stopOneSecondEvaluator();
-      }
-    });
-
-    // 6月モードボタン
-    juneBtn.addEventListener('touchstart', (e) => {
-      e.stopPropagation();
-      isJuneMode = !isJuneMode;
-      if (isJuneMode) {
-        juneBtn.className = "btn active";
-        odaiDisplay.style.display = "block";
-        statusBadge.innerText = "6月モード";
-        statusBadge.style.background = "#e91e63"; statusBadge.style.color = "#fff";
-        isLocked = true;
-        fab.className = "btn locked"; fab.innerText = "🔒 固定中";
-        odaiIndex = 0; nextOdai();
-        juneTimer = setInterval(nextOdai, 1000);
-      } else {
-        juneBtn.className = "btn";
-        odaiDisplay.style.display = "none";
-        statusBadge.innerText = "追従中";
-        statusBadge.style.background = "#eee"; statusBadge.style.color = "#000";
-        isLocked = false;
-        fab.className = "btn"; fab.innerText = "🔓 ロック";
-        clearInterval(juneTimer);
-      }
-    });
-
-    function nextOdai() {
-      currentOdai = odaiList[odaiIndex];
-      odaiDisplay.innerText = currentOdai;
-      odaiIndex = (odaiIndex + 1) % odaiList.length;
-    }
-
-    function drawHandKeyboard(hand, posPositions, namesList, color) {
-      if (!hand.hasPosition || hand.stableFingers.length !== 4) return;
-
-      ctx.strokeStyle = "rgba(128,128,128,0.25)"; ctx.lineWidth = 2;
-      for (let i = 0; i < 4; i++) {
-        ctx.beginPath(); ctx.moveTo(hand.stableFingers[i].x, hand.stableFingers[i].y);
-        ctx.lineTo(hand.adjustedCenters[i].x, hand.adjustedCenters[i].y); ctx.stroke();
-      }
-
-      for (let i = 0; i < 4; i++) {
-        let pos = hand.stableFingers[i]; let angle = hand.fourAngles[i];
-        
-        ctx.fillStyle = "rgba(0,0,0,0.2)"; ctx.font = "11px sans-serif";
-        ctx.fillText(`指${i}`, pos.x, pos.y - 42);
-
-        posPositions[i].forEach((offset, m) => {
-          let keyPos = { 
-            x: pos.x + (offset.x * Math.cos(angle) + offset.y * Math.sin(angle)), 
-            y: pos.y + (offset.x * Math.sin(angle) - offset.y * Math.cos(angle)) 
-          };
-          ctx.save(); ctx.translate(keyPos.x, keyPos.y); ctx.rotate(angle);
-          ctx.fillStyle = "#ffffff"; ctx.strokeStyle = color; ctx.lineWidth = 2;
-          ctx.beginPath(); ctx.roundRect(-keySize, -keySize, keySize * 2, keySize * 2, 8); ctx.fill(); ctx.stroke();
-          ctx.fillStyle = "#000000";
-          let label = namesList[i][m] || "";
-          ctx.font = `${m === namesList[i].length - 1 ? keySize/4 : keySize/2}px sans-serif`;
-          ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(label, 0, 0);
-          ctx.restore();
-        });
-      }
-    }
-
-    function loop() {
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      drawHandKeyboard(leftHand, leftKeysPositions, leftKeysNames, "rgba(33, 150, 243, 0.5)");
-      drawHandKeyboard(rightHand, rightKeysPositions, rightKeysNames, "rgba(244, 67, 54, 0.5)");
-
-      Object.values(trails).forEach(pointsList => {
-        pointsList.forEach((p, index) => {
-          let t = index / pointsList.length;
-          ctx.beginPath(); ctx.arc(p.x, p.y, (waterSize + waterSize * t) / 2, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(0, 150, 255, ${t * 0.4})`; ctx.fill();
-        });
-      });
-      requestAnimationFrame(loop);
-    }
-    loop();
-  </script>
-</body>
-</html>
+          let totalDist = Math.hypot(end.x - start.x, end.y - start.
