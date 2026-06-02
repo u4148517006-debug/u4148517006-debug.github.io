@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>両手用流水キーボード - 4点認識振り直し版</title>
+  <title>両手用流水キーボード - 上部コントロール版</title>
   <style>
     body, html {
       margin: 0; padding: 0; overflow: hidden;
@@ -12,13 +12,44 @@
     }
     canvas { display: block; width: 100vw; height: 100vh; }
     
-    #info-panel {
-      position: absolute; top: 16px; left: 16px;
-      background: rgba(255,255,255,0.8); padding: 12px;
-      border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-      pointer-events: none; font-size: 12px; z-index: 10;
-      font-family: monospace; line-height: 1.4;
+    /* 📱 画面上部に一列に並べるヘッダーコンテナ */
+    #header-control {
+      position: absolute; top: 0; left: 0; width: 100%; height: 60px;
+      background: rgba(255, 255, 255, 0.9);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 16px; box-sizing: border-box; z-index: 100;
     }
+
+    .flex-left { display: flex; align-items: center; gap: 12px; }
+    .flex-center { 
+      font-size: 13px; font-family: monospace; line-height: 1.2; 
+      color: #333; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .flex-right { display: flex; align-items: center; gap: 12px; }
+
+    /* 上部用にボタンのサイズとスタイルを調整 */
+    .btn {
+      height: 40px; padding: 0 16px; color: white; border: none; border-radius: 20px; 
+      font-size: 14px; font-weight: bold; display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.2); cursor: pointer; touch-action: none;
+    }
+    #fab { background-color: #4CAF50; min-width: 50px; }
+    #fab.locked { background-color: #f44336; }
+    #june-btn { background-color: #9C27B0; }
+    #june-btn.active { background-color: #FF5722; }
+
+    #status-badge {
+      font-size: 12px; background: #eee; padding: 4px 8px; border-radius: 4px; font-weight: bold;
+    }
+
+    /* 🎯 6月モードのお題（特大表示）の位置もヘッダーの下に調整 */
+    #odai-display {
+      position: absolute; top: 25%; left: 50%; transform: translate(-50%, -50%);
+      font-size: 96px; font-weight: bold; color: #E91E63;
+      pointer-events: none; z-index: 5; display: none;
+    }
+
     #border-line {
       position: absolute; top: 50%; left: 0; width: 100%; height: 1px;
       background: rgba(0,0,0,0.1); pointer-events: none; z-index: 1;
@@ -27,23 +58,39 @@
 </head>
 <body>
 
-  <canvas id="canvas"></canvas>
-  <div id="border-line"></div>
-  
-  <div id="info-panel">
-    <div>【両手ステータス】</div>
-    <div id="ml-features">左右それぞれのエリアに4本指を置いてください</div>
+  <div id="header-control">
+    <div class="flex-left">
+      <button id="june-btn" class="btn">6月モード</button>
+      <button id="fab" class="btn">🔓 ロック</button>
+    </div>
+    
+    <div id="ml-features" class="flex-center">
+      両手のエリア（上下）に4本指を置いてください
+    </div>
+    
+    <div class="flex-right">
+      <span id="status-badge">待機中</span>
+    </div>
   </div>
 
+  <canvas id="canvas"></canvas>
+  <div id="border-line"></div>
+  <div id="odai-display">あ</div>
+
   <script>
-    // ===================================================
-    // 🔄 画面の回転向き設定 (trueで90度、falseで270度反転)
-    // ===================================================
+    // ==========================================
+    // 🛠️ 設定：GASのURL と 回転向き
+    // ==========================================
+    const GAS_URL = "";
     const IS_90_DEGREE = true; 
 
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
+    const fab = document.getElementById('fab');
+    const juneBtn = document.getElementById('june-btn');
+    const statusBadge = document.getElementById('status-badge');
     const mlFeaturesText = document.getElementById('ml-features');
+    const odaiDisplay = document.getElementById('odai-display');
 
     function resize() {
       canvas.width = window.innerWidth; canvas.height = window.innerHeight;
@@ -105,6 +152,14 @@
     let leftHand = new Hand(true);  
     let rightHand = new Hand(false); 
     let trails = {};
+    let isLocked = false;
+
+    // モード管理
+    let isJuneMode = false;
+    let juneTimer = null;
+    const odaiList = ["あ", "い", "う", "え", "お", "か", "き", "く", "け", "こ"];
+    let odaiIndex = 0;
+    let currentOdai = "";
 
     function lerp(a, b, t) { return { x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t }; }
     function distance(a, b) { return Math.hypot(b.x - a.x, b.y - a.y); }
@@ -114,20 +169,9 @@
       return lerp(a, b, speed > 5 ? 5 : speed);
     }
 
-    // 🛠️ 【完全再構築】縦並びバグを消し去る固定ソートプログラム
     function sortFingersAbsolute(pts, isTopArea) {
-      // iPad横置き時、指のY座標（上下の並び）で物理的にソートする
-      // 常に一定の方向で上から下に並べる
       let sorted = [...pts].sort((a, b) => a.y - b.y);
-
-      // 90度と270度で、人差し指[0]〜小指[3]の物理的な上下関係をひっくり返す
-      if (IS_90_DEGREE) {
-        // 90度：上が人差し指、下が小指になるよう配置（手の向きに応じて調整）
-        return sorted; 
-      } else {
-        // 270度：上下が逆転する場合
-        return sorted.reverse();
-      }
+      return IS_90_DEGREE ? sorted : sorted.reverse();
     }
 
     function circleCenterFrom2Points(a, b) {
@@ -144,6 +188,9 @@
       let activeIds = new Set();
 
       Array.from(e.touches).forEach(t => {
+        // ヘッダーコントロール領域(高さ60px)での通常タッチ移動による誤作動を防止
+        if (t.clientY < 60 && e.type === 'touchmove') return;
+
         activeIds.add(t.identifier);
         let pt = { x: t.clientX, y: t.clientY };
         if (pt.y < midY) topPoints.push(pt); else bottomPoints.push(pt);
@@ -153,8 +200,8 @@
         if (trails[t.identifier].length > 15) trails[t.identifier].shift();
       });
 
-      // 左手（上エリア）4点検知で新ロジック適用
-      if (topPoints.length >= 4) {
+      // 左手（上エリア）
+      if (!isLocked && topPoints.length >= 4) {
         leftHand.isTracking = true;
         let sorted = sortFingersAbsolute(topPoints.slice(0, 4), true);
         if (leftHand.stableFingers.length === 0) {
@@ -163,10 +210,13 @@
         }
         leftHand.strokeEnds = sorted.map(p => ({...p}));
         updateHandGeometry(leftHand, sorted);
+      } else if (isLocked && leftHand.stableFingers.length === 4 && topPoints.length > 0) {
+        let sorted = sortFingersAbsolute(topPoints, true);
+        leftHand.strokeEnds = leftHand.stableFingers.map((sf, idx) => sorted[idx] || sf);
       }
 
-      // 右手（下エリア）4点検知で新ロジック適用
-      if (bottomPoints.length >= 4) {
+      // 右手（下エリア）
+      if (!isLocked && bottomPoints.length >= 4) {
         rightHand.isTracking = true;
         let sorted = sortFingersAbsolute(bottomPoints.slice(0, 4), false);
         if (rightHand.stableFingers.length === 0) {
@@ -175,12 +225,17 @@
         }
         rightHand.strokeEnds = sorted.map(p => ({...p}));
         updateHandGeometry(rightHand, sorted);
+      } else if (isLocked && rightHand.stableFingers.length === 4 && bottomPoints.length > 0) {
+        let sorted = sortFingersAbsolute(bottomPoints, false);
+        rightHand.strokeEnds = rightHand.stableFingers.map((sf, idx) => sorted[idx] || sf);
       }
 
       if (e.touches.length === 0) {
         evaluateGlobalFlick();
-        leftHand.reset();
-        rightHand.reset();
+        if (!isLocked) {
+          leftHand.reset();
+          rightHand.reset();
+        }
       }
 
       Object.keys(trails).forEach(id => { if (!activeIds.has(Number(id))) delete trails[id]; });
@@ -233,23 +288,77 @@
       allMovements.sort((a, b) => b.distance - a.distance);
       let top2 = allMovements.slice(0, 2);
 
-      if (top2.length > 0) {
+      if (top2.length > 0 && top2[0].distance > 15) {
         mlFeaturesText.innerHTML = top2.map((f, rank) => 
-          `${rank+1}位: ${f.hand}・指${f.fingerIndex} (移動:${Math.round(f.distance)}px)<br>&nbsp;&nbsp;&nbsp;最終相対座標 ➔ X: ${f.rx}, Y: ${f.ry}`
-        ).join('<br><br>');
+          `[${rank+1}位] ${f.hand}-指${f.fingerIndex} (X:${f.rx}, Y:${f.ry})`
+        ).join(' | ');
+        
+        if (isJuneMode) {
+          sendToSpreadsheet(currentOdai, top2);
+        }
       } else {
-        mlFeaturesText.innerText = "タップ";
+        mlFeaturesText.innerText = "待機中 / タップ検出";
       }
+    }
+
+    async function sendToSpreadsheet(char, top2Data) {
+      if (!GAS_URL) return;
+      try {
+        await fetch(GAS_URL, {
+          method: "POST",
+          headers: { "Content-Type": "text/plain" },
+          body: JSON.stringify({ char: char, top2: top2Data })
+        });
+      } catch (e) { console.error(e); }
     }
 
     window.addEventListener('touchstart', handleTouch);
     window.addEventListener('touchmove', (e) => { handleTouch(e); e.preventDefault(); }, { passive: false });
     window.addEventListener('touchend', handleTouch);
 
+    // 🔒 ロックボタンのイベント
+    fab.addEventListener('touchstart', (e) => {
+      e.stopPropagation(); 
+      if (leftHand.stableFingers.length === 4 || rightHand.stableFingers.length === 4) {
+        isLocked = !isLocked;
+        fab.className = isLocked ? "btn locked" : "btn";
+        fab.innerText = isLocked ? "🔒 固定中" : "🔓 ロック";
+        statusBadge.innerText = isLocked ? "位置固定" : "追従中";
+      }
+    });
+
+    // 🍇 6月モードボタンのイベント
+    juneBtn.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+      isJuneMode = !isJuneMode;
+      if (isJuneMode) {
+        juneBtn.className = "btn active";
+        odaiDisplay.style.display = "block";
+        statusBadge.innerText = "6月モード";
+        isLocked = true;
+        fab.className = "btn locked"; fab.innerText = "🔒 固定中";
+        odaiIndex = 0; nextOdai();
+        juneTimer = setInterval(nextOdai, 1000);
+      } else {
+        juneBtn.className = "btn";
+        odaiDisplay.style.display = "none";
+        statusBadge.innerText = "待機中";
+        isLocked = false;
+        fab.className = "btn"; fab.innerText = "🔓 ロック";
+        clearInterval(juneTimer);
+      }
+    });
+
+    function nextOdai() {
+      currentOdai = odaiList[odaiIndex];
+      odaiDisplay.innerText = currentOdai;
+      odaiIndex = (odaiIndex + 1) % odaiList.length;
+    }
+
     function drawHandKeyboard(hand, posPositions, namesList, color) {
       if (hand.stableFingers.length !== 4) return;
 
-      ctx.strokeStyle = "rgba(128,128,128,0.4)"; ctx.lineWidth = 2;
+      ctx.strokeStyle = "rgba(128,128,128,0.3)"; ctx.lineWidth = 2;
       for (let i = 0; i < 4; i++) {
         ctx.beginPath(); ctx.moveTo(hand.stableFingers[i].x, hand.stableFingers[i].y);
         ctx.lineTo(hand.adjustedCenters[i].x, hand.adjustedCenters[i].y); ctx.stroke();
@@ -258,9 +367,8 @@
       for (let i = 0; i < 4; i++) {
         let pos = hand.stableFingers[i]; let angle = hand.fourAngles[i];
         
-        // デバッグ用に指のインデックス番号(0~3)をうっすら描画
-        ctx.fillStyle = "rgba(0,0,0,0.2)"; ctx.font = "12px sans-serif";
-        ctx.fillText(`指${i}`, pos.x, pos.y - 45);
+        ctx.fillStyle = "rgba(0,0,0,0.15)"; ctx.font = "11px sans-serif";
+        ctx.fillText(`F${i}`, pos.x, pos.y - 42);
 
         posPositions[i].forEach((offset, m) => {
           let keyPos = { 
@@ -281,8 +389,8 @@
 
     function loop() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      drawHandKeyboard(leftHand, leftKeysPositions, leftKeysNames, "rgba(33, 150, 243, 0.6)");
-      drawHandKeyboard(rightHand, rightKeysPositions, rightKeysNames, "rgba(244, 67, 54, 0.6)");
+      drawHandKeyboard(leftHand, leftKeysPositions, leftKeysNames, "rgba(33, 150, 243, 0.5)");
+      drawHandKeyboard(rightHand, rightKeysPositions, rightKeysNames, "rgba(244, 67, 54, 0.5)");
 
       Object.values(trails).forEach(pointsList => {
         pointsList.forEach((p, index) => {
