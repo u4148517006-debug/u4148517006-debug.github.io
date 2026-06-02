@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>両手用流水キーボード - 角度バグ完全修正＆右側集約版</title>
+  <title>両手用流水キーボード - 根本修正・完全対称版</title>
   <style>
     body, html {
       margin: 0; padding: 0; overflow: hidden;
@@ -12,21 +12,26 @@
     }
     canvas { display: block; width: 100vw; height: 100vh; }
     
-    /* 📱 iPad横置き時の「右端」にコントロールと表示を集約 */
-    #right-control {
-      position: absolute; top: 0; right: 0; width: 140px; height: 100%;
-      background: rgba(255, 255, 255, 0.92);
-      box-shadow: -2px 0 10px rgba(0,0,0,0.1);
-      display: flex; flex-direction: column; align-items: center;
-      padding: 24px 12px; box-sizing: border-box; z-index: 100;
-      gap: 16px;
+    /* 📥 【変更】コントロールエリアを「画面上部」に集約 */
+    #header-control {
+      position: absolute; top: 0; left: 0; width: 100%; height: 60px;
+      background: rgba(255, 255, 255, 0.95);
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 16px; box-sizing: border-box; z-index: 100;
     }
 
-    /* 右側縦並び用のスタイル調整 */
+    .flex-left { display: flex; align-items: center; gap: 12px; }
+    .flex-center { 
+      font-size: 13px; font-family: monospace; line-height: 1.2; 
+      color: #333; max-width: 50%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .flex-right { display: flex; align-items: center; gap: 12px; }
+
     .btn {
-      width: 100%; height: 44px; color: white; border: none; border-radius: 8px; 
-      font-size: 13px; font-weight: bold; display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 2px 5px rgba(0,0,0,0.15); cursor: pointer; touch-action: none;
+      height: 40px; padding: 0 16px; color: white; border: none; border-radius: 8px; 
+      font-size: 14px; font-weight: bold; display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.1); cursor: pointer; touch-action: none;
     }
     #fab { background-color: #4CAF50; }
     #fab.locked { background-color: #f44336; }
@@ -34,38 +39,36 @@
     #june-btn.active { background-color: #FF5722; }
 
     #status-badge {
-      font-size: 12px; background: #eee; padding: 6px 12px; border-radius: 4px; font-weight: bold; width: 100%; text-align: center; box-sizing: border-box;
+      font-size: 12px; background: #eee; padding: 6px 12px; border-radius: 4px; font-weight: bold;
     }
 
-    #ml-features {
-      font-size: 11px; font-family: monospace; line-height: 1.4; color: #333;
-      word-break: break-all; margin-top: 10px; width: 100%;
-    }
-
-    /* 🎯 6月モードのお題（特大表示）は邪魔にならない中央左寄りに */
+    /* 🍇 6月モードのお題（特大表示） */
     #odai-display {
-      position: absolute; top: 30%; left: 40%; transform: translate(-50%, -50%);
+      position: absolute; top: 30%; left: 50%; transform: translate(-50%, -50%);
       font-size: 120px; font-weight: bold; color: #E91E63;
       pointer-events: none; z-index: 5; display: none;
     }
 
+    /* デバッグ用：画面中央の分割線 */
     #border-line {
-      position: absolute; top: 50%; left: 0; width: calc(100% - 140px); height: 1px;
+      position: absolute; top: 50%; left: 0; width: 100%; height: 1px;
       background: rgba(0,0,0,0.1); pointer-events: none; z-index: 1;
     }
   </style>
 </head>
 <body>
 
-  <div id="right-control">
-    <span id="status-badge">追従中</span>
-    <button id="fab" class="btn">🔓 ロック</button>
-    <button id="june-btn" class="btn">6月モード</button>
+  <div id="header-control">
+    <div class="flex-left">
+      <button id="june-btn" class="btn">6月モード</button>
+      <button id="fab" class="btn">🔓 ロック</button>
+    </div>
     
-    <hr style="width:100%; border:0; border-top:1px solid #ccc; margin: 8px 0;">
+    <div id="ml-features" class="flex-center">両手エリア（上下）に4本指を置いてください</div>
     
-    <div style="font-size:11px; font-weight:bold; color:#666; width:100%;">【フリック確定】</div>
-    <div id="ml-features">両手エリアに4指を置いて動かしてください</div>
+    <div class="flex-right">
+      <span id="status-badge">追従中</span>
+    </div>
   </div>
 
   <canvas id="canvas"></canvas>
@@ -100,16 +103,23 @@
     const moveLeft = { x: keySize * -2.14, y: 0 };
     const threeKeys = [stay, moveUp, moveDown, { x: moveUp.x * 2, y: moveUp.y * 2 }];
 
-    const leftKeysPositions = [
-      [stay, moveUp, moveDown, moveLeft, { x: moveLeft.x + moveUp.x, y: moveLeft.y + moveUp.y }, { x: moveLeft.x + moveDown.x, y: moveLeft.y + moveDown.y }, { x: moveUp.x * 2, y: moveUp.y * 2 }],
-      threeKeys, threeKeys, threeKeys
+    // ーーー 【変更】完全対称・反転キー配置マップ ーーー
+
+    // 【右手用：標準】(小指 -> 人差し指)
+    const rightKeysPositions = [
+      threeKeys, // 小指
+      threeKeys, // 薬指
+      threeKeys, // 中指
+      [stay, moveUp, moveDown, moveLeft, { x: moveLeft.x + moveUp.x, y: moveLeft.y + moveUp.y }, { x: moveLeft.x + moveDown.x, y: moveLeft.y + moveDown.y }, { x: moveUp.x * 2, y: moveUp.y * 2 }] // 人差し指
     ];
-    const leftKeysNames = [
-      ["J", "U", "M", "H", "Y", "N", "止"], ["K", "I", ",", "止"], ["L", "O", ".", "止"], [";", "P", "?", "止"]
+    const rightKeysNames = [
+      [";", "P", "?", "止"], ["L", "O", ".", "止"], ["K", "I", ",", "止"], ["J", "U", "M", "H", "Y", "N", "止"]
     ];
 
-    const rightKeysPositions = leftKeysPositions;
-    const rightKeysNames = [
+    // 【左手用：右手と完全対称（反転）】(人差し指 -> 小指)
+    // キー名だけを逆順に割り当てる
+    const leftKeysPositions = rightKeysPositions;
+    const leftKeysNames = [
       ["F", "R", "V", "G", "T", "B", "止"], ["D", "E", "C", "止"], ["S", "W", "X", "止"], ["A", "Q", "Z", "止"]
     ];
 
@@ -147,6 +157,7 @@
     let trails = {};
     let isLocked = false;
 
+    // モード管理
     let isJuneMode = false;
     let juneTimer = null;
     const odaiList = ["あ", "い", "う", "え", "お", "か", "き", "く", "け", "こ"];
@@ -161,16 +172,16 @@
       return lerp(a, b, speed > 5 ? 5 : speed);
     }
 
-    // 🛠️ 【角度バグ完全克服】放射状（極座標）幾何学ソート
+    // 🛠️ 【角度バグ根本修正】扇形（極座標）幾何学ソート
     function sortFingersByAngle(pts) {
       if (pts.length < 4) return pts;
 
-      // 1. 4点の重心（中心）を割り出す
+      // 1. 4点全体の重心（中心）を割り出す
       let cx = 0, cy = 0;
       pts.forEach(p => { cx += p.x; cy += p.y; });
       cx /= pts.length; cy /= pts.length;
 
-      // 2. 重心から見た各点の「純粋な角度(ラジアン)」を計算して持たせる
+      // 2. 重心から見た各点の「純粋な角度」を計算
       let ptsWithAngle = pts.map(p => {
         return { x: p.x, y: p.y, angle: Math.atan2(p.y - cy, p.x - cx) };
       });
@@ -178,11 +189,12 @@
       // 3. 角度順（時計回り）にソート
       ptsWithAngle.sort((a, b) => a.angle - b.angle);
 
-      // 4. 手の進入方向（右からか左からか）に応じて、人差し指[0]〜小指[3]になるよう配列を最適化
+      // 4. 手の向きに応じて人差し指〜小指を固定する
       if (IS_HAND_FROM_RIGHT) {
-        // 右から手が伸びる場合、角度の並びをそのまま適用（または必要に応じてreverse）
+        // 右から手が伸びる場合
         return ptsWithAngle.map(p => ({ x: p.x, y: p.y }));
       } else {
+        // 左から手が伸びる場合（逆順）
         return ptsWithAngle.reverse().map(p => ({ x: p.x, y: p.y }));
       }
     }
@@ -196,14 +208,11 @@
 
     function handleTouch(e) {
       let midY = canvas.height / 2;
-      let rightBoundary = canvas.width - 140; // 右側メニュー領域の衝突防止
       let topPoints = [];
       let bottomPoints = [];
       let activeIds = new Set();
 
       Array.from(e.touches).forEach(t => {
-        if (t.clientX > rightBoundary) return; // メニュー領域内のタッチ移動はキーボードから除外
-
         activeIds.add(t.identifier);
         let pt = { x: t.clientX, y: t.clientY };
         if (pt.y < midY) topPoints.push(pt); else bottomPoints.push(pt);
@@ -303,14 +312,14 @@
 
       if (top2.length > 0 && top2[0].distance > 15) {
         mlFeaturesText.innerHTML = top2.map((f, rank) => 
-          `<b>${rank+1}位: ${f.hand}-指${f.fingerIndex}</b><br>X: ${f.rx}<br>Y: ${f.ry}`
-        ).join('<br><br>');
+          `${rank+1}位: ${f.hand}-指${f.fingerIndex} (X:${f.rx}, Y:${f.ry})`
+        ).join(' | ');
         
         if (isJuneMode) {
           sendToSpreadsheet(currentOdai, top2);
         }
       } else {
-        mlFeaturesText.innerText = "待機中<br>(タップ検出)";
+        mlFeaturesText.innerText = "待機中 / タップ検出";
       }
     }
 
@@ -329,6 +338,7 @@
     window.addEventListener('touchmove', (e) => { handleTouch(e); e.preventDefault(); }, { passive: false });
     window.addEventListener('touchend', handleTouch);
 
+    // 🔒 ロックボタンのイベント
     fab.addEventListener('touchstart', (e) => {
       e.stopPropagation(); 
       if (leftHand.stableFingers.length === 4 || rightHand.stableFingers.length === 4) {
@@ -340,6 +350,7 @@
       }
     });
 
+    // 🍇 6月モードボタンのイベント
     juneBtn.addEventListener('touchstart', (e) => {
       e.stopPropagation();
       isJuneMode = !isJuneMode;
@@ -381,7 +392,7 @@
       for (let i = 0; i < 4; i++) {
         let pos = hand.stableFingers[i]; let angle = hand.fourAngles[i];
         
-        ctx.fillStyle = "rgba(0,0,0,0.2)"; ctx.font = "11px sans-serif";
+        ctx.fillStyle = "rgba(0,0,0,0.15)"; ctx.font = "11px sans-serif";
         ctx.fillText(`指${i}`, pos.x, pos.y - 42);
 
         posPositions[i].forEach((offset, m) => {
@@ -403,8 +414,6 @@
 
     function loop() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-      
-      // キーボードエリア（右端140pxを除いた作業空間）のみに描画
       drawHandKeyboard(leftHand, leftKeysPositions, leftKeysNames, "rgba(33, 150, 243, 0.5)");
       drawHandKeyboard(rightHand, rightKeysPositions, rightKeysNames, "rgba(244, 67, 54, 0.5)");
 
