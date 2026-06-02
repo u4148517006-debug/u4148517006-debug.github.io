@@ -3,109 +3,108 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>4指マルチタッチ仮想キーボード</title>
+  <title>4指マルチタッチ仮想キーボード - 6月モード</title>
   <style>
     body, html {
       margin: 0; padding: 0; overflow: hidden;
-      background-color: #ffffff;
-      font-family: sans-serif;
-      user-select: none;
-      -webkit-user-select: none;
+      background-color: #ffffff; font-family: sans-serif;
+      user-select: none; -webkit-user-select: none;
     }
-    canvas {
-      display: block; width: 100vw; height: 100vh;
+    canvas { display: block; width: 100vw; height: 100vh; }
+    
+    /* 共通ボタン構造 */
+    .btn {
+      position: absolute; bottom: 24px; width: 56px; height: 56px;
+      color: white; border: none; border-radius: 50%; font-size: 24px;
+      display: flex; align-items: center; justify-content: center;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.3); cursor: pointer; z-index: 10;
     }
-    /* ロックボタン（鍵アイコン風） */
-    #fab {
-      position: absolute; bottom: 24px; right: 24px;
-      width: 56px; height: 56px;
-      background-color: #4CAF50; color: white;
-      border: none; border-radius: 50%;
-      box-shadow: 0 4px 10px rgba(0,0,0,0.3);
-      font-size: 24px; display: flex; align-items: center; justify-content: center;
-      cursor: pointer; z-index: 10; touch-action: none;
-    }
+    #fab { right: 24px; background-color: #4CAF50; }
     #fab.locked { background-color: #f44336; }
+    
+    /* ★6月モード用ボタン */
+    #june-btn { right: 96px; background-color: #9C27B0; font-size: 14px; font-weight: bold; }
+    #june-btn.active { background-color: #FF5722; }
+
+    #info-panel {
+      position: absolute; top: 16px; left: 16px;
+      background: rgba(256,256,256,0.8); padding: 12px;
+      border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+      pointer-events: none; font-size: 14px; z-index: 10;
+    }
+    /* ★お題を画面中央にデカデカと表示するスタイル */
+    #odai-display {
+      position: absolute; top: 15%; left: 50%; transform: translate(-50%, -50%);
+      font-size: 96px; font-weight: bold; color: #E91E63;
+      pointer-events: none; z-index: 5; display: none;
+    }
   </style>
 </head>
 <body>
 
   <canvas id="canvas"></canvas>
-  <button id="fab">🔓</button>
+  <button id="june-btn" class="btn">6月</button>
+  <button id="fab" class="btn">🔓</button>
+  
+  <div id="info-panel">
+    <div>ステータス: <span id="status-text">待機中</span></div>
+    <div>ジェスチャー判定: <span id="predict-text">-</span></div>
+  </div>
 
-  <script>
+  <div id="odai-display">あ</div>
+
+  <script type="module">
+    import { keySize, waterSize, keysPositions, keysNames, centerAdjust } from './key_config.js';
+    import { updateMotionHistory, isMoving, motionHistory } from './motion_history.js';
+    import { predictGesture, sendToSpreadsheet } from './dtw.js';
+
     const canvas = document.getElementById('canvas');
     const ctx = canvas.getContext('2d');
     const fab = document.getElementById('fab');
+    const juneBtn = document.getElementById('june-btn');
+    const statusText = document.getElementById('status-text');
+    const predictText = document.getElementById('predict-text');
+    const odaiDisplay = document.getElementById('odai-display');
 
     function resize() {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      canvas.width = window.innerWidth; canvas.height = window.innerHeight;
     }
     window.addEventListener('resize', resize);
     resize();
 
-    // --- 定数定義 ---
-    const keySize = 41;
-    const waterSize = 20;
-    
-    const stay = { x: 0, y: 0 };
-    const moveUp = { x: keySize * -0.23, y: keySize * 2.2 };
-    const moveDown = { x: keySize * 0.23, y: keySize * -2.2 };
-    const moveLeft = { x: keySize * -2.14, y: 0 };
-    
-    const threeKeys = [stay, moveUp, moveDown, { x: moveUp.x * 2, y: moveUp.y * 2 }];
-    const keysPositions = [
-      [stay, moveUp, moveDown, moveLeft, { x: moveLeft.x + moveUp.x, y: moveLeft.y + moveUp.y }, { x: moveLeft.x + moveDown.x, y: moveLeft.y + moveDown.y }, { x: moveUp.x * 2, y: moveUp.y * 2 }],
-      threeKeys, threeKeys, threeKeys
-    ];
-
-    const keysNames = [
-      ["J", "U", "M", "H", "Y", "N", "Offset"],
-      ["K", "I", ",", "Offset"],
-      ["L", "O", ".", "Offset"],
-      [";", "P", "?", "Offset"]
-    ];
-
-    const centerAdjust = [
-      { x: keySize * -3.7, y: keySize * -0.2 },
-      { x: keySize * -1.3, y: keySize * -1.3 },
-      { x: keySize * 1.3,  y: keySize * -1.3 },
-      { x: keySize * 3.5,  y: keySize * -0.2 }
-    ];
-
-    // --- 状態管理変数 ---
+    // 状態管理
     let touches = {};        
     let trails = {};         
-    let motionHistory = [];  
-    const pointsLength = 4;
-
     let stableFingers = [];
     let stableCenter = null;
     let adjustedCenters = [];
     let fourAngles = [];
     let lineMovings = [false, false, false, false];
-
-    // ★ 位置固定のための新フラグ
     let isLocked = false; 
 
-    // --- 数学ヘルパー関数 ---
+    // データ収集用
+    let isRecordingGesture = false;
+    let recordedStroke = []; 
+
+    // ★6月モード用の状態管理
+    let isJuneMode = false;
+    let juneTimer = null;
+    const odaiList = ["あ", "い", "う", "え", "お", "か", "き", "く", "け", "こ"];
+    let odaiIndex = 0;
+    let currentOdai = "";
+
+    // 数学関数群
     function lerp(a, b, t) { return { x: a.x * (1 - t) + b.x * t, y: a.y * (1 - t) + b.y * t }; }
     function distance(a, b) { return Math.hypot(b.x - a.x, b.y - a.y); }
-    
     function archer(a, b) {
       let dis = distance(a, b);
-      let ratio = dis / (4.3 * keySize);
-      let speed = Math.pow(ratio, 4) / 58;
-      if (speed > 5) speed = 5;
-      return lerp(a, b, speed);
+      let speed = Math.pow(dis / (4.3 * keySize), 4) / 58;
+      return lerp(a, b, speed > 5 ? 5 : speed);
     }
-
     function mean(pts) {
       let sum = pts.reduce((acc, p) => ({ x: acc.x + p.x, y: acc.y + p.y }), { x: 0, y: 0 });
       return { x: sum.x / pts.length, y: sum.y / pts.length };
     }
-
     function sortByPrincipalAxis(pts) {
       const c = mean(pts);
       let sxx = 0, syy = 0, sxy = 0;
@@ -115,215 +114,197 @@
       });
       let theta = 0.5 * Math.atan2(2 * sxy, sxx - syy);
       let axis = { x: Math.cos(theta), y: Math.sin(theta) };
-
-      return [...pts].sort((a, b) => {
-        let da = (a.x - c.x) * axis.x + (a.y - c.y) * axis.y;
-        let db = (b.x - c.x) * axis.x + (b.y - c.y) * axis.y;
-        return da - db;
-      });
+      return [...pts].sort((a, b) => ((a.x - c.x) * axis.x + (a.y - c.y) * axis.y) - ((b.x - c.x) * axis.x + (b.y - c.y) * axis.y));
     }
-
     function circleCenterFrom2Points(a, b) {
       let vx = b.x - a.x; let vy = b.y - a.y;
-      function rotate(x, y, rad, c) {
-        return {
-          x: (x * Math.cos(rad) - y * Math.sin(rad)) * c,
-          y: (x * Math.sin(rad) + y * Math.cos(rad)) * c
-        };
-      }
-      let r1 = rotate(vx, vy, Math.PI * 0.3, 1.35);
-      let r2 = rotate(vx, vy, -Math.PI * 0.3, 1.35);
+      let r1 = { x: (vx * Math.cos(Math.PI*0.3) - vy * Math.sin(Math.PI*0.3)) * 1.35, y: (vx * Math.sin(Math.PI*0.3) + vy * Math.cos(Math.PI*0.3)) * 1.35 };
       let e1 = { x: a.x + r1.x, y: a.y + r1.y };
-      let e2 = { x: a.x + r2.x, y: a.y + r2.y };
-      return (e1.y > a.y) ? e1 : e2;
+      return (e1.y > a.y) ? e1 : { x: a.x + (vx * Math.cos(-Math.PI*0.3) - vy * Math.sin(-Math.PI*0.3)) * 1.35, y: a.y + (vx * Math.sin(-Math.PI*0.3) + vy * Math.cos(-Math.PI*0.3)) * 1.35 };
     }
 
-    function isMoving() {
-      if (motionHistory.length < pointsLength) return [false, false, false, false];
-      let answer = [];
-      let recent = motionHistory.slice(-pointsLength);
-
-      for (let finger = 0; finger < 4; finger++) {
-        let pts = recent.map(f => f[finger]);
-        let lineLength = distance(pts[0], pts[pts.length - 1]);
-        let speed = lineLength / pointsLength;
-
-        let start = pts[0]; let end = pts[pts.length - 1];
-        let baseLen = distance(start, end);
-        let sumDist = 0;
-        if (baseLen > 0) {
-          pts.forEach(p => {
-            let proj = ((p.x - start.x) * (end.x - start.x) + (p.y - start.y) * (end.y - start.y)) / baseLen;
-            let closest = { x: start.x + (end.x - start.x) * (proj / baseLen), y: start.y + (end.y - start.y) * (proj / baseLen) };
-            sumDist += distance(p, closest);
-          });
-        }
-        let straightness = sumDist / pts.length;
-        answer.push(speed > 4 && straightness < 3); 
-      }
-      return answer;
-    }
-
-    // --- タッチイベントリスナー ---
+    // タッチイベント
     function handleTouch(e) {
       let currentTouches = {};
       Array.from(e.touches).forEach(t => {
         currentTouches[t.identifier] = { x: t.clientX, y: t.clientY };
-        
         if (!trails[t.identifier]) trails[t.identifier] = [];
         trails[t.identifier].push({ x: t.clientX, y: t.clientY });
         if (trails[t.identifier].length > 25) trails[t.identifier].shift();
       });
       touches = currentTouches;
 
-      Object.keys(trails).forEach(id => {
-        if (!touches[id]) delete trails[id];
-      });
+      let fingerCount = Object.keys(touches).length;
+      
+      // レコーディング開始条件 (固定中、または6月モード中)
+      if ((isLocked || isJuneMode) && fingerCount > 0 && !isRecordingGesture) {
+        isRecordingGesture = true;
+        recordedStroke = [];
+        statusText.innerText = isJuneMode ? `お題【${currentOdai}】収集中...` : "ジェスチャー収集中...";
+      }
+
+      // 指が離れたストローク終了時
+      if (fingerCount === 0 && isRecordingGesture) {
+        isRecordingGesture = false;
+        statusText.innerText = isJuneMode ? "6月モード稼働中" : "固定中 (待機)";
+        
+        if (recordedStroke.length > 3) {
+          if (isJuneMode) {
+            // ★6月モードなら、現在表示されているお題文字のラベルと一緒にGoogleスプシへ送信！
+            sendToSpreadsheet(currentOdai, recordedStroke);
+            predictText.innerText = `スプシへ送信完了 -> [${currentOdai}]`;
+          } else {
+            let result = predictGesture(recordedStroke);
+            predictText.innerText = typeof result === 'object' ? `${result.label} (Score: ${result.score.toFixed(1)})` : result;
+          }
+        }
+      }
+
+      Object.keys(trails).forEach(id => { if (!touches[id]) delete trails[id]; });
     }
 
-    window.addEventListener('touchstart', (e) => { handleTouch(e); });
+    window.addEventListener('touchstart', handleTouch);
     window.addEventListener('touchmove', (e) => { handleTouch(e); e.preventDefault(); }, { passive: false });
-    window.addEventListener('touchend', (e) => { handleTouch(e); });
+    window.addEventListener('touchend', handleTouch);
 
-    // ★ ボタンイベントを「位置固定（ロック）」用に変更
+    // 固定ボタン
     fab.addEventListener('touchstart', (e) => {
       e.stopPropagation(); 
-      
-      // キーボードの位置情報が生成されている時のみロック可能
       if (stableFingers.length === 4) {
         isLocked = !isLocked;
-        if (isLocked) {
-          fab.className = "locked"; fab.innerText = "🔒";
-        } else {
-          fab.className = ""; fab.innerText = "🔓";
-        }
+        fab.className = isLocked ? "btn locked" : "btn";
+        fab.innerText = isLocked ? "🔒" : "🔓";
+        statusText.innerText = isLocked ? "固定中 (待機)" : "追従中";
       }
     });
 
-    // --- メイン描画ループ ---
+    // ★6月モードボタンのイベント
+    juneBtn.addEventListener('touchstart', (e) => {
+      e.stopPropagation();
+      if (stableFingers.length !== 4) return; // キーボードが生成されてから
+
+      isJuneMode = !isJuneMode;
+      if (isJuneMode) {
+        juneBtn.className = "btn active";
+        odaiDisplay.style.display = "block";
+        statusText.innerText = "6月モード稼働中";
+        
+        // 自動的にキーボードも固定化状態にする
+        isLocked = true;
+        fab.className = "btn locked"; fab.innerText = "🔒";
+
+        // 1秒(1000ms)ごとのタイマーループ開始
+        odaiIndex = 0;
+        nextOdai();
+        juneTimer = setInterval(nextOdai, 1000);
+      } else {
+        juneBtn.className = "btn";
+        odaiDisplay.style.display = "none";
+        statusText.innerText = "追従中";
+        isLocked = false;
+        fab.className = "btn"; fab.innerText = "🔓";
+        
+        clearInterval(juneTimer);
+      }
+    });
+
+    // お題を進める関数
+    function nextOdai() {
+      currentOdai = odaiList[odaiIndex];
+      odaiDisplay.innerText = currentOdai;
+      
+      odaiIndex++;
+      if (odaiIndex >= odaiList.length) {
+        odaiIndex = 0; // 最後までいったら最初に戻る
+      }
+    }
+
+    // メイン描画ループ (中身は前回のロジックのまま維持)
     function loop() {
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
       let points = Object.values(touches);
 
-      // ★ 修正：ロックされていない、かつ4本以上のタッチがある場合のみ基準位置を追従アップデート
       if (!isLocked && points.length >= 4) {
         let sortedPoints = sortByPrincipalAxis(points);
         let realFingers = sortedPoints.slice(0, 4);
         let realCenter = circleCenterFrom2Points(realFingers[0], realFingers[3]);
 
         if (stableFingers.length === 0 || !stableCenter) {
-          stableFingers = realFingers.map(p => ({...p}));
-          stableCenter = realCenter;
+          stableFingers = realFingers.map(p => ({...p})); stableCenter = realCenter;
           adjustedCenters = [stableCenter, stableCenter, stableCenter, stableCenter];
-          let u = { x: adjustedCenters[1].x - stableFingers[1].x, y: adjustedCenters[1].y - stableFingers[1].y };
-          let p = Math.atan2(u.y, u.x) + Math.PI / 2;
+          let p = Math.atan2(adjustedCenters[1].y - stableFingers[1].y, adjustedCenters[1].x - stableFingers[1].x) + Math.PI / 2;
           fourAngles = [p, p, p, p];
         }
 
-        for (let i = 0; i < 4; i++) {
-          stableFingers[i] = archer(stableFingers[i], realFingers[i]);
-        }
+        for (let i = 0; i < 4; i++) stableFingers[i] = archer(stableFingers[i], realFingers[i]);
         stableCenter = archer(stableCenter, realCenter);
-
-        let centerLine = { x: stableFingers[1].x - stableCenter.x, y: stableFingers[1].y - stableCenter.y };
-        let centerAngle = Math.atan2(centerLine.y, centerLine.x) + Math.PI / 2;
+        let centerAngle = Math.atan2(stableFingers[1].y - stableCenter.y, stableFingers[1].x - stableCenter.x) + Math.PI / 2;
 
         for (let i = 0; i < 4; i++) {
           let u = centerAdjust[i];
-          let centerRotated = {
-            x: u.x * Math.cos(centerAngle) - u.y * Math.sin(centerAngle),
-            y: u.x * Math.sin(centerAngle) + u.y * Math.cos(centerAngle)
+          adjustedCenters[i] = { 
+            x: stableCenter.x + (u.x * Math.cos(centerAngle) - u.y * Math.sin(centerAngle)), 
+            y: stableCenter.y + (u.x * Math.sin(centerAngle) + u.y * Math.cos(centerAngle)) 
           };
-          adjustedCenters[i] = { x: stableCenter.x + centerRotated.x, y: stableCenter.y + centerRotated.y };
-        }
-
-        for (let i = 0; i < 4; i++) {
-          let u = { x: stableFingers[i].x - adjustedCenters[i].x, y: stableFingers[i].y - adjustedCenters[i].y };
-          fourAngles[i] = Math.atan2(u.y, u.x) + Math.PI / 2;
+          fourAngles[i] = Math.atan2(stableFingers[i].y - adjustedCenters[i].y, stableFingers[i].x - adjustedCenters[i].x) + Math.PI / 2;
         }
       }
 
-      // 描画処理（stableFingersに値があれば、指を離していても常に描画し続ける）
       if (stableFingers.length === 4) {
-        
-        // 移動判定のためのダミー・履歴処理（ロック中はリアル指がないので仮の静止座標を入力）
         let currentRotated = [];
         for (let i = 0; i < 4; i++) {
-          // ロック中に入力されたタッチがあればそこから、無ければ静止判定
-          currentRotated.push({ x: 0, y: 0 });
+          let angle = fourAngles[i];
+          let activePt = points[i] || stableFingers[i]; 
+          let np = { x: activePt.x - stableFingers[i].x, y: activePt.y - stableFingers[i].y };
+          currentRotated.push({ 
+            x: np.x * Math.cos(angle) + np.y * Math.sin(angle), 
+            y: np.x * Math.sin(angle) - np.y * Math.cos(angle) 
+          });
         }
-        motionHistory.push(currentRotated);
-        if (motionHistory.length > 30) motionHistory.shift();
+
+        updateMotionHistory(currentRotated);
         lineMovings = isMoving();
 
-        // --- 描画1: グレーの骨組み線 ---
-        ctx.strokeStyle = "grey"; ctx.lineWidth = 3;
-        for (let i = 0; i < 4; i++) {
-          ctx.beginPath();
-          ctx.moveTo(stableFingers[i].x, stableFingers[i].y);
-          ctx.lineTo(adjustedCenters[i].x, adjustedCenters[i].y);
-          ctx.stroke();
+        if (isRecordingGesture) {
+          recordedStroke.push(currentRotated);
         }
 
-        // --- 描画2: 仮想キーボード ---
+        ctx.strokeStyle = "grey"; ctx.lineWidth = 3;
         for (let i = 0; i < 4; i++) {
-          let pos = stableFingers[i];
-          let angle = fourAngles[i];
+          ctx.beginPath(); ctx.moveTo(stableFingers[i].x, stableFingers[i].y);
+          ctx.lineTo(adjustedCenters[i].x, adjustedCenters[i].y); ctx.stroke();
+        }
 
+        for (let i = 0; i < 4; i++) {
+          let pos = stableFingers[i]; let angle = fourAngles[i];
           keysPositions[i].forEach((offset, m) => {
-            let rotated = {
-              x: offset.x * Math.cos(angle) + offset.y * Math.sin(angle),
-              y: offset.x * Math.sin(angle) - offset.y * Math.cos(angle)
+            let keyPos = { 
+              x: pos.x + (offset.x * Math.cos(angle) + offset.y * Math.sin(angle)), 
+              y: pos.y + (offset.x * Math.sin(angle) - offset.y * Math.cos(angle)) 
             };
-            let keyPos = { x: pos.x + rotated.x, y: pos.y + rotated.y };
-
-            ctx.save();
-            ctx.translate(keyPos.x, keyPos.y);
-            ctx.rotate(angle);
-
-            // ロック中はキーボードの背景を少し淡いグレーにして「固定中」と分かりやすくする
-            ctx.fillStyle = isLocked ? "#f5f5f5" : "#ffffff";
-            ctx.strokeStyle = "#000000"; ctx.lineWidth = 3;
-            
-            ctx.beginPath();
-            ctx.roundRect(-keySize, -keySize, keySize * 2, keySize * 2, 10);
-            ctx.fill(); ctx.stroke();
-
+            ctx.save(); ctx.translate(keyPos.x, keyPos.y); ctx.rotate(angle);
+            ctx.fillStyle = isLocked ? "#f5f5f5" : "#ffffff"; ctx.strokeStyle = "#000000"; ctx.lineWidth = 3;
+            ctx.beginPath(); ctx.roundRect(-keySize, -keySize, keySize * 2, keySize * 2, 10); ctx.fill(); stroke();
             ctx.fillStyle = "#000000";
             let label = keysNames[i][m] || "";
-            let fontSize = keySize / 2;
-            if (m === keysNames[i].length - 1) {
-              label = isLocked ? "固定中" : (lineMovings[i] ? "動いてる" : "待機状態");
-              fontSize = keySize / 4;
-            }
-            ctx.font = `${fontSize}px sans-serif`;
-            ctx.textAlign = "center"; ctx.textBaseline = "middle";
-            ctx.fillText(label, 0, 0);
-
+            if (m === keysNames[i].length - 1) label = isLocked ? (lineMovings[i] ? "動いてる" : "待機") : "追従中";
+            ctx.font = `${m === keysNames[i].length - 1 ? keySize/4 : keySize/2}px sans-serif`;
+            ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(label, 0, 0);
             ctx.restore();
           });
         }
 
-        // --- 描画3: 手首の大きなサークル ---
         if (stableCenter) {
-          ctx.strokeStyle = isLocked ? "#f44336" : "#000000"; // ロック中は赤線に
-          ctx.lineWidth = 5;
-          ctx.beginPath();
-          ctx.arc(stableCenter.x, stableCenter.y, 150, 0, Math.PI * 2);
-          ctx.stroke();
+          ctx.strokeStyle = isLocked ? "#f44336" : "#000000"; ctx.lineWidth = 5;
+          ctx.beginPath(); ctx.arc(stableCenter.x, stableCenter.y, 150, 0, Math.PI * 2); ctx.stroke();
         }
       }
 
-      // --- 描画4: 流水エフェクト ---
       Object.values(trails).forEach(pointsList => {
         pointsList.forEach((p, index) => {
           let t = index / pointsList.length;
-          let radius = waterSize + waterSize * t;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, radius / 2, 0, Math.PI * 2);
-          ctx.fillStyle = `rgba(0, 150, 255, ${t * 0.5})`;
-          ctx.fill();
+          ctx.beginPath(); ctx.arc(p.x, p.y, (waterSize + waterSize * t) / 2, 0, Math.PI * 2);
+          ctx.fillStyle = `rgba(0, 150, 255, ${t * 0.5})`; ctx.fill();
         });
       });
 
